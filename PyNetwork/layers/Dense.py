@@ -3,7 +3,9 @@ import numpy as np
 from PyNetwork import get_activation_function
 from PyNetwork.layers import Layer
 from PyNetwork.validation import check_layer
+from PyNetwork import utils
 
+import pyopencl.array as cl_array
 
 class Dense(Layer):
     """ A fully connected layer
@@ -67,7 +69,7 @@ class Dense(Layer):
 
         self.built = False
 
-    def build(self, previous_output_shape):
+    def build(self, device_context, device_queue, previous_output_shape):
         """ Initialises the weight and bias units
 
             Parameters
@@ -75,6 +77,9 @@ class Dense(Layer):
             previous_output_shape : 1 tuple of int
                 The output shape of the previous layer. This will dictate the size of the weight matrix
         """
+        self.context = device_context
+        self.queue = device_queue
+
         self.output_shape = (self.hidden_nodes, )
         self.input_shape = previous_output_shape
 
@@ -88,7 +93,10 @@ class Dense(Layer):
         if self.trainable_mask is not None:
             assert self.trainable_mask.shape == self.W.shape, f"Trainable mask {self.trainable_mask.shape} must have the " \
                                                               f"same shape as the weight {self.W.shape}"                                                  
-            
+
+        # Send W and b to device
+        self.W = cl_array.to_device(self.queue, self.W)
+        self.b = cl_array.to_device(self.queue, self.b)    
 
         self.built = True
 
@@ -99,7 +107,7 @@ class Dense(Layer):
             ----------
             z : (N, j) np.array
                 z is assumed to be a list of all the inputs to be forward propagated. In particular
-                it is assumed that the first index of z is the index that inputs is accessed by
+                it is assumed that the first index of z is the index that inputs is accessed by.
             output_only : bool, optional
                 If set to true, then this function will return only the prediction of the neural
                 network. If set to false then this will return the outputs of the individual
@@ -119,8 +127,9 @@ class Dense(Layer):
                 activation function.
         """
         check_layer(self)
-
-        out_a = z @ self.W.T + self.b
+        z_gpu = cl_array.to_device(self.queue, z)
+        gpu_layer = utils.SingleLayer(self.context, self.queue)
+        out_a = gpu_layer.matmul(self.W, z_gpu, self.b).get()
 
         if output_only:
             return self.activation_function_(out_a)

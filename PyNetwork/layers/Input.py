@@ -35,7 +35,7 @@ class Input(Layer):
 
         self.built = False
 
-    def build(self, *args, **kwargs):
+    def build(self, device_context, device_queue, *args, **kwargs):
         """ Initialises the layer
 
             Notes
@@ -45,6 +45,8 @@ class Input(Layer):
             implementation
         """
         self.built = True
+        self.context = device_context
+        self.queue = device_queue
 
     def predict(self, z, *args, output_only=True, **kwargs):
         """ Returns the output of this layer
