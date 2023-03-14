@@ -49,6 +49,8 @@ class SingleLayer:
     b : (n, ) np.array
         b is assumed to be a vector of biases.
         b is assumed to be sent to the device.
+    input_index: m
+    output_index: n
 
     Returns
     -------
