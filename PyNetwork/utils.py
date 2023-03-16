@@ -91,6 +91,27 @@ class SingleLayer:
     
 # Returns the delta for the previous layer, delta^{k-1}_{m,j}
 class Backprop:
+    """
+
+    Parameters
+    ----------
+    W : (n, m) np.array
+        W is assumed to be a list of all the weights.
+        W is assumed to be sent to the device.
+    g_prime : (d, m) np.array
+        g_prime is the derivative of the output of the previous layer, g'_{k-1}(a^{k-1}_{m,j}).
+        g_prime is assumed to be sent to the device.
+    new_delta : (d, n) np.array
+        new_delta is the delta for this layer, delta^k_{m, j}.
+        new_delta is assumed to be sent to the device.
+    input_index: n
+    output_index: m
+
+    Returns
+    -------
+    (d, m) np.array
+    Returns delta of the previous layer, delta^{k-1}
+        """
     def __init__(self, context, queue):
         self.context = context
         self.queue = queue
