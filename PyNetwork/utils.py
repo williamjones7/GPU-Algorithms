@@ -33,6 +33,21 @@ __kernel void matmul(__global float *W, __global float *Z, __global float *b, in
 }
 """
 
+# C kernel for backpropagation
+back_prop_c_code = """
+__kernel void single_backprop(__global float *W, __global float *g_prime, __global float *new_delta, int input_index, __global float *out){
+    int i = get_global_id(0);
+    int j = get_global_id(1);
+    int output_index = get_global_size(1);
+    out[i * output_index + j] = 0.0;
+    
+    for (int k = 0; k < input_index; k++){
+        out[i * output_index + j] += new_delta[i * input_index + k] * W[k * output_index + j];
+    }
+    out[i * output_index + j] *= g_prime[i * output_index + j];
+}
+"""
+
 # Clean up
 class SingleLayer:
     """ Returns the output of this layer
@@ -73,3 +88,21 @@ class SingleLayer:
         self.program.matmul(self.queue, global_size, local_size, 
                             W.data, Z.data, b.data, np.int32(input_index), matrix_out.data).wait()
         return matrix_out
+    
+# Returns the delta for the previous layer, delta^{k-1}_{m,j}
+class Backprop:
+    def __init__(self, context, queue):
+        self.context = context
+        self.queue = queue
+        self.program = cl.Program(context, back_prop_c_code).build()
+
+    def get_delta(self, W, g_prime, new_delta):
+        global_size = g_prime.shape
+        local_size = None
+
+        _, input_index = new_delta.shape
+        delta_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        
+        self.program.single_backprop(self.queue, global_size, local_size, 
+                               W.data, g_prime.data, new_delta.data, np.int32(input_index), delta_out.data).wait()
+        return delta_out

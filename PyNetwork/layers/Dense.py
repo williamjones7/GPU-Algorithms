@@ -100,12 +100,12 @@ class Dense(Layer):
 
         self.built = True
 
-    def predict(self, z, output_only=True, **kwargs):
+    def predict(self, z_gpu, output_only=True, **kwargs):
         """ Returns the output of this layer
 
             Parameters
             ----------
-            z : (N, j) np.array
+            z_gpu : (N, j) np.array
                 z is assumed to be a list of all the inputs to be forward propagated. In particular
                 it is assumed that the first index of z is the index that inputs is accessed by.
             output_only : bool, optional
@@ -127,7 +127,6 @@ class Dense(Layer):
                 activation function.
         """
         check_layer(self)
-        z_gpu = cl_array.to_device(self.queue, z)
         gpu_layer = utils.SingleLayer(self.context, self.queue)
         out_a = gpu_layer.matmul(self.W, z_gpu, self.b).get()
 
@@ -135,7 +134,7 @@ class Dense(Layer):
             return self.activation_function_(out_a)
         return out_a, self.activation_function_(out_a)
 
-    def get_delta_backprop_(self, g_prime, new_delta, *args):
+    def get_delta_backprop_(self, g_prime_gpu, new_delta_gpu, *args):
         """ Returns the delta for the previous layer, delta^{k-1}_{m,j}.
 
             Notes
@@ -146,18 +145,21 @@ class Dense(Layer):
 
             Parameters
             ----------
-            g_prime : (N, j) np.array
-                Should be the derivative of the ouput of the previous layer, g'_{k-1}(a^{k-1}_{m,j})
-            new_delta : (N, k) np.array
+            g_prime_gpu : (N, j) np.array
+                Should be the derivative of the output of the previous layer, g'_{k-1}(a^{k-1}_{m,j})
+            new_delta_gpu : (N, k) np.array
                 The delta for this layer, delta^k_{m, j}
 
             Returns
             -------
-            np.array
+            (N, j) np.array
                 Returns delta of the previous layer, delta^{k-1}
         """
         check_layer(self)
-        return g_prime*(new_delta @ self.W)
+
+        gpu_backprop = utils.Backprop(self.context, self.queue)
+        delta_result = gpu_backprop.get_delta(self.W, g_prime_gpu, new_delta_gpu)
+        return delta_result.get()
 
     def get_weight_grad_(self, delta, prev_z):
         """ Returns the associated partial S/partial W^k, that is
