@@ -1,5 +1,11 @@
 import numpy as np
 
+import pyopencl as cl
+import pyopencl.array as cl_array
+from pyopencl.elementwise import ElementwiseKernel
+from pyopencl import clmath
+
+import time
 
 def get_activation_function(name, **kwargs):
     """ Returns the function of the given name
@@ -121,3 +127,26 @@ def get_metric_function(name):
         return accuracy
     else:
         raise Exception(f'{name} is not a defined metric.')
+
+    
+x = np.array([1.0, 4.0, 9.0, 16.0])
+x = np.ones(100)
+
+platform = cl.get_platforms()
+devices = platform[0].get_devices()
+context = cl.Context(devices)
+queue = cl.CommandQueue(context)
+
+sqrt_program = ElementwiseKernel(context, 
+                                "double *x, double *out",
+                                "out[i] = sqrt(x[i])", 
+                                "square_root")
+
+x_gpu = cl_array.to_device(queue, x)
+
+print(clmath.sqrt(x_gpu))
+out = cl_array.zeros_like(x_gpu)
+
+sqrt_program(x_gpu, out)
+
+print(out)
