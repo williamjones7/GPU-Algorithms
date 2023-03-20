@@ -133,6 +133,7 @@ x = np.array([1.0, 4.0, 9.0, 16.0])
 x = np.ones(100)
 
 platform = cl.get_platforms()
+print(platform)
 devices = platform[0].get_devices()
 context = cl.Context(devices)
 queue = cl.CommandQueue(context)
@@ -150,3 +151,9 @@ out = cl_array.zeros_like(x_gpu)
 sqrt_program(x_gpu, out)
 
 print(out)
+
+def GPU_sqrt(queue, x):
+    x_gpu = cl_array.to_device(queue, x)
+    clmath.sqrt(x_gpu)
+
+print(GPU_sqrt(queue, x))
