@@ -2,7 +2,6 @@ import numpy as np
 
 from PyNetwork.optimizers import Optimizer
 
-
 class Adam(Optimizer):
     """ Adam optimiser
 
@@ -35,6 +34,7 @@ class Adam(Optimizer):
             b2 : float, optional
             e : float, optional
         """
+        
         self.learning_rate = learning_rate
         self.b1 = b1
         self.b2 = b2

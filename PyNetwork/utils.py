@@ -127,3 +127,4 @@ class Backprop:
         self.program.single_backprop(self.queue, global_size, local_size, 
                                W.data, g_prime.data, new_delta.data, np.int32(input_index), delta_out.data).wait()
         return delta_out
+    
