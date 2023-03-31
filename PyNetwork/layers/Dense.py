@@ -18,13 +18,15 @@ class Dense(Layer):
             Name of the activation function
         built : bool
             Has the model been initialised
-        output_shape : (k, ) tuple
+        output_shape : (n, ) tuple
             The shape of the output of this layer
-        input_shape : (j, ) tuple
+        input_shape : (m, ) tuple
             The shape of the input of this layer
-        W : (k, j) np.array
+        W : (n, m) OpenCL array
             The weight matrix
-        b : (k, ) np.array
+        W_F : (n, m) OpenCL array
+            The F-contiguous weight matrix
+        b : (n, ) OpenCL array
             The bias unit
 
         Notes
@@ -87,25 +89,26 @@ class Dense(Layer):
         # where limit = sqrt(6 / (fan_in + fan_out)) (fan_in is the number of input units in the weight
         # tensor and fan_out is the number of output units).
         limit = np.sqrt(6 / (np.prod(self.input_shape) + np.prod(self.output_shape)))
-        self.W = np.random.uniform(low=-limit, high=limit, size=(*self.output_shape, *previous_output_shape))
-        self.b = np.zeros(self.output_shape)
+        W = np.random.uniform(low=-limit, high=limit, size=(*self.output_shape, *previous_output_shape))
+
+        self.W = cl_array.to_device(self.queue, W)
+        self.W_F = cl_array.to_device(self.queue, np.asfortranarray(W)) 
+        self.b = cl_array.zeros(self.queue, self.output_shape, dtype=np.float32)
         
         if self.trainable_mask is not None:
             assert self.trainable_mask.shape == self.W.shape, f"Trainable mask {self.trainable_mask.shape} must have the " \
                                                               f"same shape as the weight {self.W.shape}"                                                  
 
-        # Send W and b to device
-        self.W = cl_array.to_device(self.queue, self.W)
-        self.b = cl_array.to_device(self.queue, self.b)    
-
         self.built = True
 
-    def predict(self, z_gpu, output_only=True, **kwargs):
+        self.gpu_layer = utils.SingleLayer(self.context, self.queue)
+
+    def predict(self, z, output_only=True, **kwargs):
         """ Returns the output of this layer
 
             Parameters
             ----------
-            z_gpu : (N, j) np.array
+            z : (d, m) np.array
                 z is assumed to be a list of all the inputs to be forward propagated. In particular
                 it is assumed that the first index of z is the index that inputs is accessed by.
             output_only : bool, optional
@@ -115,100 +118,117 @@ class Dense(Layer):
 
             Returns
             -------
-            (N, k) np.array
+            (d, n) np.array
                 The final output of the layer, post activation
 
             OR (if `output_only = False`)
 
-            (N, k) np.array, (N, k) np.array
+            (d, n) np.array, (d, n) np.array
                 The first np.array will store the output before it is passed through the activation
                 function.
                 The second np.array will store the output after it has passed through the
                 activation function.
         """
         check_layer(self)
-        gpu_layer = utils.SingleLayer(self.context, self.queue)
-        out_a = gpu_layer.matmul(self.W, z_gpu, self.b).get()
+
+        # store as F-contiguous for transpose and accuracy
+        W_F_T = cl_array.transpose(self.W_F)
+        z_gpu = cl_array.to_device(self.queue, z)
+
+        prod = self.gpu_layer.naiveMatmul(z_gpu, W_F_T)
+        out_a = self.gpu_layer.addVector(prod, self.b)
 
         if output_only:
             return self.activation_function_(out_a)
         return out_a, self.activation_function_(out_a)
 
-    def get_delta_backprop_(self, g_prime_gpu, new_delta_gpu, *args):
-        """ Returns the delta for the previous layer, delta^{k-1}_{m,j}.
+    def get_delta_backprop_(self, g_prime, new_delta, *args):
+        """ Returns the delta for the previous layer, delta^{n-1}_{m,m}.
 
             Notes
             -----
-            We want to return delta^{k-1} because the `sequential` class does not have access to the
-            weights, W. But it does know the values of g'_{k-1} and delta^k, due to forward propagation
+            We want to return delta^{n-1} because the `sequential` class does not have access to the
+            weights, W. But it does know the values of g'_{n-1} and delta^n, due to forward propagation
             and the backwards nature of the back propagation algorithm.
 
             Parameters
             ----------
-            g_prime_gpu : (N, j) np.array
-                Should be the derivative of the output of the previous layer, g'_{k-1}(a^{k-1}_{m,j})
-            new_delta_gpu : (N, k) np.array
-                The delta for this layer, delta^k_{m, j}
+            g_prime : (d, m) np.array
+                Should be the derivative of the output of the previous layer, g'_{n-1}(a^{n-1}_{m,m})
+            new_delta : (d, n) np.array
+                The delta for this layer, delta^k_{m, m}
 
             Returns
             -------
-            (N, j) np.array
-                Returns delta of the previous layer, delta^{k-1}
+            (d, m) np.array
+                Returns delta of the previous layer, delta^{n-1}
         """
         check_layer(self)
 
-        gpu_backprop = utils.Backprop(self.context, self.queue)
-        delta_result = gpu_backprop.get_delta(self.W, g_prime_gpu, new_delta_gpu)
-        return delta_result.get()
+        g_prime_gpu = cl_array.to_device(self.queue, g_prime)
+        new_delta_gpu = cl_array.to_device(self.queue, new_delta)
+
+        delta_result = g_prime_gpu * self.gpu_layer.naiveMatmul(new_delta_gpu, self.W)
+        return delta_result
 
     def get_weight_grad_(self, delta, prev_z):
-        """ Returns the associated partial S/partial W^k, that is
+        """ Returns the associated partial S/partial W^n, that is
             the gradient with respect to the weight matrix in the kth layer
 
             Parameters
             ----------
-            delta : (N, k) np.array
+            delta : (d, n) np.array
                 In latex, this should be delta_k
-            prev_z : (N, j) np.array
-                This should be the output, post activation, of the previous layer (z_{k-1})
+            prev_z : (d, m) np.array
+                This should be the output, post activation, of the previous layer (z_{n-1})
 
             Returns
             -------
-            (N, k) np.array, (N, k) np.array
+            (n, ) np.array, (n, m) np.array
                 The first array is the gradient for the bias unit
                 The second array is the gradient for the weight matrix
         """
         check_layer(self)
 
-        weight_grad = delta.T @ prev_z
-        delta_grad = np.sum(delta, axis=0)
+        delta_gpu = cl_array.to_device(self.queue, delta)
+        prev_z_gpu = cl_array.to_device(self.queue, prev_z)
+        # store as F-contiguous for transpose and accuracy
+        delta_gpu_F = cl_array.to_device(self.queue, np.asfortranarray(delta))
+        delta_gpu_T = cl_array.transpose(delta_gpu_F)
 
-        return delta_grad, weight_grad
+        weight_grad = self.gpu_layer.naiveMatmul(delta_gpu_T, prev_z_gpu)
+        bias_grad = self.gpu_layer.columnSumUp(delta_gpu)
+
+        return bias_grad, weight_grad
 
     def update_parameters_(self, bias_updates, weight_updates):
         """ Perform an update to the weights by descending down the gradient
 
             Parameters
             ----------
-            bias_updates : (k, ) np.array
+            bias_updates : (n, ) np.array
                 The gradients for the bias units
-            weight_updates : (k, j) np.array
+            weight_updates : (n, m) np.array
                 The gradients for the weight matrix
         """
         check_layer(self)
 
-        regularization_grad = 0
+        bias_updates_gpu = cl_array.to_device(self.queue, bias_updates)
+        weight_updates_gpu = cl_array.to_device(self.queue, weight_updates)
+        trainable_mask_gpu = cl_array.to_device(self.queue, self.trainable_mask)
+ 
+        regularization_grad = cl_array.zeros(self.queue, self.W.shape, dtype=np.float32)
         if self.l1 > 0:
-            regularization_grad += self.l1 * np.sign(self.W)
+            regularization_grad += self.l1 * utils.gpu_layer.sign(self.W)
         if self.l2 > 0:
             regularization_grad += self.l2 * self.W
 
         if self.trainable_mask is None:
-            self.W -= (weight_updates + regularization_grad)
+            self.W -= (weight_updates_gpu + regularization_grad)
         else:
-            self.W -= (weight_updates + regularization_grad) * self.trainable_mask
+            self.W -= (weight_updates_gpu + regularization_grad) * trainable_mask_gpu
             
-        self.b -= bias_updates
+        self.b -= bias_updates_gpu
 
     def get_weights(self):
         check_layer(self)
