@@ -3,127 +3,109 @@ import pyopencl.array as cl_array
 
 import numpy as np
 
+from pyopencl.elementwise import ElementwiseKernel
+
 def buffer_str(input_str, max_buffer=30):
     if len(input_str) < max_buffer:
         return input_str + ' ' * (max_buffer - len(input_str))
     return input_str
 
-
-single_layer_c_code = """
-__kernel void vecmul(__global float *W, __global float *z, __global float *b, int input_index, __global float *out){
-    int j = get_global_id(0);
-    out[j] = 0.0;
-    
-    for (int k = 0; k < input_index; k++){
-        out[j] += z[k] * W[j * input_index + k];
-    }
-    out[j] += b[j];
-}
-
-__kernel void matmul(__global float *W, __global float *Z, __global float *b, int input_index, __global float *out){
+# C kernel for naive calculations
+naive_program = """
+//naive matrix multiplication
+__kernel void naive_matmul(__global float *X, __global float *Y, int input_width, __global float *out){
     int i = get_global_id(0);
     int j = get_global_id(1);
-    int output_index = get_global_size(1);
-    out[i * output_index + j] = 0.0;
+    int output_width = get_global_size(1);
+    double product = 0.0;
     
-    for (int k = 0; k < input_index; k++){
-        out[i * output_index + j] += Z[i * input_index + k] * W[j * input_index + k];
+    for (int k = 0; k < input_width; k++){
+        product += X[i * input_width + k] * Y[k * output_width + j];
     }
-    out[i * output_index + j] += b[j];
+    out[i * output_width + j] = product;
+}
+
+//add a vector b to a matrix X
+__kernel void add_vector(__global float *X, __global float *b, __global float *out){
+    int i = get_global_id(0);
+    int j = get_global_id(1);
+    int output_width = get_global_size(1);
+    int index = i * output_width + j;
+    double sum = 0.0;
+    sum = X[index] + b[j];
+    out[index] = sum;
+}
+
+//returns the sum of each columns
+
+__kernel void column_sums(__global float *delta, int output_width, __global float *bias_out){
+    int i = get_global_id(0);
+    int input_width = get_global_size(0);
+    bias_out[i] = 0.0;
+    for (int k = 0; k < output_width; k++){
+        bias_out[i] += delta[k * input_width + i];
+    }
 }
 """
 
-# C kernel for backpropagation
-back_prop_c_code = """
-__kernel void single_backprop(__global float *W, __global float *g_prime, __global float *new_delta, int input_index, __global float *out){
-    int i = get_global_id(0);
-    int j = get_global_id(1);
-    int output_index = get_global_size(1);
-    out[i * output_index + j] = 0.0;
-    
-    for (int k = 0; k < input_index; k++){
-        out[i * output_index + j] += new_delta[i * input_index + k] * W[k * output_index + j];
-    }
-    out[i * output_index + j] *= g_prime[i * output_index + j];
-}
-"""
-
-# Clean up
 class SingleLayer:
-    """ Returns the output of this layer
-
-    Parameters
-    ----------
-    z : (d, m) np.array
-        z is assumed to be a list of all the inputs to be forward propagated. In particular
-        it is assumed that the first index of z is the index that inputs is accessed by.
-        z is assumed to be sent to the device.
-    W : (n, m) np.array
-        W is assumed to be a list of all the weights.
-        W is assumed to be sent to the device.
-    b : (n, ) np.array
-        b is assumed to be a vector of biases.
-        b is assumed to be sent to the device.
-    input_index: m
-    output_index: n
-
-    Returns
-    -------
-    (d, n) np.array
-        The final output of the layer, post activation
-        """
     def __init__(self, context, queue):
         self.context = context
         self.queue = queue
-        self.program = cl.Program(context, single_layer_c_code).build()
+        self.program = cl.Program(context, naive_program).build()
 
-    # Computation
-    def matmul(self, W, Z, b):
-        global_size = (Z.shape[0], b.shape[0])
+    def naiveMatmul(self, X, Y):
+        '''
+        "Naive" Matrix Multiplication
+        '''
+        global_size = (X.shape[0], Y.shape[1])
         local_size = None
 
-        _, input_index = W.shape
+        _, input_width = X.shape
         matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
         
-        self.program.matmul(self.queue, global_size, local_size, 
-                            W.data, Z.data, b.data, np.int32(input_index), matrix_out.data).wait()
+        self.program.naive_matmul(self.queue, global_size, local_size, 
+                               X.data, Y.data, np.int32(input_width), matrix_out.data).wait()
         return matrix_out
-    
-# Returns the delta for the previous layer, delta^{k-1}_{m,j}
-class Backprop:
-    """
 
-    Parameters
-    ----------
-    W : (n, m) np.array
-        W is assumed to be a list of all the weights.
-        W is assumed to be sent to the device.
-    g_prime : (d, m) np.array
-        g_prime is the derivative of the output of the previous layer, g'_{k-1}(a^{k-1}_{m,j}).
-        g_prime is assumed to be sent to the device.
-    new_delta : (d, n) np.array
-        new_delta is the delta for this layer, delta^k_{m, j}.
-        new_delta is assumed to be sent to the device.
-    input_index: n
-    output_index: m
-
-    Returns
-    -------
-    (d, m) np.array
-    Returns delta of the previous layer, delta^{k-1}
-        """
-    def __init__(self, context, queue):
-        self.context = context
-        self.queue = queue
-        self.program = cl.Program(context, back_prop_c_code).build()
-
-    def get_delta(self, W, g_prime, new_delta):
-        global_size = g_prime.shape
+    def addVector(self, X, b):
+        '''
+        Add a vector b to a matrix X
+        '''
+        global_size = X.shape
         local_size = None
-
-        _, input_index = new_delta.shape
-        delta_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
         
-        self.program.single_backprop(self.queue, global_size, local_size, 
-                               W.data, g_prime.data, new_delta.data, np.int32(input_index), delta_out.data).wait()
-        return delta_out
+        self.program.add_vector(self.queue, global_size, local_size, 
+                               X.data, b.data, matrix_out.data).wait()
+        return matrix_out 
+
+    def columnSumUp(self, X):
+        '''
+        Returns the sum of each column
+        '''
+        global_size = (X.shape[1], )
+        output_width, _ = X.shape
+        local_size = None
+        matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        
+        self.program.column_sums(self.queue, global_size, local_size, 
+                               X.data, np.int32(output_width), matrix_out.data).wait()
+        return matrix_out 
+
+    # Implementation of np.sign in OpenCL
+    def sign(self, x):
+        '''
+        Implementation of np.sign in OpenCL.
+        Only works for 64-bit float number or number with higher precision.
+        '''
+        sign_program = ElementwiseKernel(self.context,
+                                    "double *x, double *out",
+                                    "out[i] = sign(x[i])",
+                                    preamble='#define sign(x) (x > 0) ? 1 : -1'
+                                    )
+        x_gpu = cl_array.to_device(self.queue, x)
+
+        out = cl_array.zeros_like(x_gpu)
+        sign_program(x_gpu, out)
+        return out
