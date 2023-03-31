@@ -1,5 +1,32 @@
 import numpy as np
 
+import pyopencl as cl
+import pyopencl.array as cl_array
+from pyopencl.elementwise import ElementwiseKernel
+from pyopencl import clmath
+
+import time
+
+x = np.array([1.0, 4.0, 9.0, 16.0])
+# x = np.ones(100)
+
+platform = cl.get_platforms()
+devices = platform[0].get_devices()
+context = cl.Context(devices)
+queue = cl.CommandQueue(context)
+
+def GPU_sqrt(queue, x):
+    x_gpu = cl_array.to_device(queue, x)
+    return clmath.sqrt(x_gpu)
+
+def GPU_max(queue, x):
+    x_gpu = cl_array.to_device(queue,x)
+    return cl_array.max(x_gpu)
+
+def GPU_sum(queue, x):
+    x_gpu = cl_array.to_device(queue,x)
+    return cl_array.sum(x_gpu,queue)
+
 
 def get_activation_function(name, **kwargs):
     """ Returns the function of the given name
@@ -121,3 +148,5 @@ def get_metric_function(name):
         return accuracy
     else:
         raise Exception(f'{name} is not a defined metric.')
+
+    
