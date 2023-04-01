@@ -53,7 +53,7 @@ class ArrayMathsFunction:
         ArrayMathsFunction.context = context
         ArrayMathsFunction.queue = queue
         ArrayMathsFunction.program = cl.Program(context, array_functions_program).build()
-
+    
     @staticmethod
     def naiveMatmul(x_gpu, y_gpu):
         '''
@@ -101,14 +101,15 @@ class ArrayMathsFunction:
     def sign(x_gpu):
         '''
         Implementation of np.sign in OpenCL.
-        Only works for 64-bit float number or number with higher precision.
         '''
         sign_program = ElementwiseKernel(ArrayMathsFunction.context,
                                     "double *x, double *out",
                                     "out[i] = sign(x[i])",
-                                    preamble='#define sign(x) (x > 0) ? 1 : -1'
+                                    preamble='#define sign(x) (x > 0.0) ? 1.0 : -1.0'
                                     )
-
-        out = cl_array.zeros_like(x_gpu)
-        sign_program(x_gpu, out).wait()
+        # Change the datatype to return a precise result 
+        x_gpu_precise = x_gpu.astype(np.float64)
+        out_precise = cl_array.zeros_like(x_gpu_precise)
+        sign_program(x_gpu_precise, out_precise).wait()
+        out = out_precise.astype(np.float32)
         return out

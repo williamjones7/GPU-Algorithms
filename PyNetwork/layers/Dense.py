@@ -5,6 +5,7 @@ from PyNetwork.layers import Layer
 from PyNetwork.validation import check_layer
 from PyNetwork import utils
 
+import pyopencl as cl
 import pyopencl.array as cl_array
 
 class Dense(Layer):
@@ -22,11 +23,11 @@ class Dense(Layer):
             The shape of the output of this layer
         input_shape : (m, ) tuple
             The shape of the input of this layer
-        W : (n, m) OpenCL array
+        W : (n, m) pyopencl.array
             The weight matrix
-        W_F : (n, m) OpenCL array
+        W_F : (n, m) pyopencl.array
             The F-contiguous weight matrix
-        b : (n, ) OpenCL array
+        b : (n, ) pyopencl.array
             The bias unit
 
         Notes
@@ -34,7 +35,7 @@ class Dense(Layer):
         It is assumed that the input to this layer is a flattened vector. As such, when passing
         a multidimensional input, use a `flatten` layer first
     """
-    def __init__(self, hidden_nodes, activation_function, l1=0.0, l2=0.0, trainable_mask=None, activation_kwargs=None, **kwargs):
+    def __init__(self, hidden_nodes, activation_function, l1=0.0, l2=0.0, trainable_mask_gpu=None, activation_kwargs=None, **kwargs):
         """ A fully connected layer
 
             Parameters
@@ -57,11 +58,11 @@ class Dense(Layer):
         self.W = None
         self.b = None
         
-        if trainable_mask is not None:
-            assert isinstance(trainable_mask, np.ndarray)
-            self.trainable_mask = trainable_mask.astype(bool) 
+        if trainable_mask_gpu is not None:
+            assert isinstance(trainable_mask_gpu, cl.ndarray)
+            self.trainable_mask_gpu = trainable_mask_gpu.astype(np.int8)
         else:
-            self.trainable_mask = None
+            self.trainable_mask_gpu = None
 
         self.basis = None
         self.coeffs = None
@@ -95,20 +96,20 @@ class Dense(Layer):
         self.W_F = cl_array.to_device(self.queue, np.asfortranarray(W)) 
         self.b = cl_array.zeros(self.queue, self.output_shape, dtype=np.float32)
         
-        if self.trainable_mask is not None:
-            assert self.trainable_mask.shape == self.W.shape, f"Trainable mask {self.trainable_mask.shape} must have the " \
+        if self.trainable_mask_gpu is not None:
+            assert self.trainable_mask_gpu.shape == self.W.shape, f"Trainable mask {self.trainable_mask_gpu.shape} must have the " \
                                                               f"same shape as the weight {self.W.shape}"                                                  
 
         self.built = True
 
         self.gpu_maths = utils.ArrayMathsFunction(self.context, self.queue)
 
-    def predict(self, z, output_only=True, **kwargs):
+    def predict(self, z_gpu, output_only=True, **kwargs):
         """ Returns the output of this layer
 
             Parameters
             ----------
-            z : (d, m) np.array
+            z_gpu : (d, m) pyopencl.array
                 z is assumed to be a list of all the inputs to be forward propagated. In particular
                 it is assumed that the first index of z is the index that inputs is accessed by.
             output_only : bool, optional
@@ -118,22 +119,21 @@ class Dense(Layer):
 
             Returns
             -------
-            (d, n) np.array
+            (d, n) pyopencl.array
                 The final output of the layer, post activation
 
             OR (if `output_only = False`)
 
-            (d, n) np.array, (d, n) np.array
-                The first np.array will store the output before it is passed through the activation
+            (d, n) pyopencl.array, (d, n) pyopencl.array
+                The first pyopencl.array will store the output before it is passed through the activation
                 function.
-                The second np.array will store the output after it has passed through the
+                The second pyopencl.array will store the output after it has passed through the
                 activation function.
         """
         check_layer(self)
 
         # store as F-contiguous for transpose and accuracy
         W_F_T = cl_array.transpose(self.W_F)
-        z_gpu = cl_array.to_device(self.queue, z)
 
         prod = self.gpu_maths.naiveMatmul(z_gpu, W_F_T)
         out_a = self.gpu_maths.addVector(prod, self.b)
@@ -142,7 +142,7 @@ class Dense(Layer):
             return self.activation_function_(out_a)
         return out_a, self.activation_function_(out_a)
 
-    def get_delta_backprop_(self, g_prime, new_delta, *args):
+    def get_delta_backprop_(self, g_prime_gpu, new_delta_gpu, *args):
         """ Returns the delta for the previous layer, delta^{n-1}_{m,m}.
 
             Notes
@@ -153,69 +153,58 @@ class Dense(Layer):
 
             Parameters
             ----------
-            g_prime : (d, m) np.array
+            g_prime_gpu : (d, m) pyopencl.array
                 Should be the derivative of the output of the previous layer, g'_{n-1}(a^{n-1}_{m,m})
-            new_delta : (d, n) np.array
+            new_delta_gpu : (d, n) pyopencl.array
                 The delta for this layer, delta^k_{m, m}
 
             Returns
             -------
-            (d, m) np.array
+            (d, m) pyopencl.array
                 Returns delta of the previous layer, delta^{n-1}
         """
         check_layer(self)
 
-        g_prime_gpu = cl_array.to_device(self.queue, g_prime)
-        new_delta_gpu = cl_array.to_device(self.queue, new_delta)
-
         delta_result = g_prime_gpu * self.gpu_maths.naiveMatmul(new_delta_gpu, self.W)
         return delta_result
 
-    def get_weight_grad_(self, delta, prev_z):
+    def get_weight_grad_(self, delta_gpu, prev_z_gpu):
         """ Returns the associated partial S/partial W^n, that is
             the gradient with respect to the weight matrix in the kth layer
 
             Parameters
             ----------
-            delta : (d, n) np.array
-                In latex, this should be delta_k
-            prev_z : (d, m) np.array
+            delta_gpu : (d, n) pyopencl.array
+                In latex, this should be delta_k.
+                Please import delta as a F-contiguous array.
+            prev_z_gpu : (d, m) pyopencl.array
                 This should be the output, post activation, of the previous layer (z_{n-1})
 
             Returns
             -------
-            (n, ) np.array, (n, m) np.array
+            (n, ) pyopencl.array, (n, m) pyopencl.array
                 The first array is the gradient for the bias unit
                 The second array is the gradient for the weight matrix
         """
         check_layer(self)
-
-        delta_gpu = cl_array.to_device(self.queue, delta)
-        prev_z_gpu = cl_array.to_device(self.queue, prev_z)
-        # store as F-contiguous for transpose and accuracy
-        delta_gpu_F = cl_array.to_device(self.queue, np.asfortranarray(delta))
-        delta_gpu_T = cl_array.transpose(delta_gpu_F)
+        delta_gpu_T = cl_array.transpose(delta_gpu)
 
         weight_grad = self.gpu_maths.naiveMatmul(delta_gpu_T, prev_z_gpu)
         bias_grad = self.gpu_maths.columnSumUp(delta_gpu)
 
         return bias_grad, weight_grad
 
-    def update_parameters_(self, bias_updates, weight_updates):
+    def update_parameters_(self, bias_updates_gpu, weight_updates_gpu):
         """ Perform an update to the weights by descending down the gradient
 
             Parameters
             ----------
-            bias_updates : (n, ) np.array
+            bias_updates_gpu : (n, ) pyopencl.array
                 The gradients for the bias units
-            weight_updates : (n, m) np.array
+            weight_updates_gpu : (n, m) pyopencl.array
                 The gradients for the weight matrix
         """
         check_layer(self)
-
-        bias_updates_gpu = cl_array.to_device(self.queue, bias_updates)
-        weight_updates_gpu = cl_array.to_device(self.queue, weight_updates)
-        trainable_mask_gpu = cl_array.to_device(self.queue, self.trainable_mask)
  
         regularization_grad = cl_array.zeros(self.queue, self.W.shape, dtype=np.float32)
         if self.l1 > 0:
@@ -223,10 +212,10 @@ class Dense(Layer):
         if self.l2 > 0:
             regularization_grad += self.l2 * self.W
 
-        if self.trainable_mask is None:
+        if self.trainable_mask_gpu is None:
             self.W -= (weight_updates_gpu + regularization_grad)
         else:
-            self.W -= (weight_updates_gpu + regularization_grad) * trainable_mask_gpu
+            self.W -= (weight_updates_gpu + regularization_grad) * self.trainable_mask_gpu
             
         self.b -= bias_updates_gpu
 
