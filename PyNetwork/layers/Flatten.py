@@ -34,7 +34,7 @@ class Flatten(Layer):
         self.input_shape = None
         self.output_shape = None
 
-    def build(self, device_context, device_queue, previous_output_shape):
+    def build(self, context, queue, previous_output_shape):
         """ Built/initialised the layer
 
             Parameters
@@ -42,38 +42,38 @@ class Flatten(Layer):
             previous_output_shape : tuple
                 The shape of the input into this layer.
         """
-        self.context = device_context
-        self.queue = device_queue
+        self.context = context
+        self.queue = queue
 
         self.input_shape = previous_output_shape
         self.output_shape = (np.prod(previous_output_shape), )
 
         self.built = True
 
-    def predict(self, z, output_only=True, pre_activation_of_input=None):
+    def predict(self, z_gpu, output_only=True, pre_activation_of_input=None):
         """ Returns the prediction of this layer
 
             Parameters
             ----------
-            z : (N, *input_shape) np.array
+            z_gpu : (N, *input_shape) pyopencl.array
                 The input to be flattened
             output_only : bool, optional
                 If set to true, then this function will return only the prediction of the neural
                 network. If set to false then this will return the outputs of the individual
                 layers. Unless back propagation is being performed, this should be set to true.
-            pre_activation_of_input : (N, *input_shape) np.array
-                The input, z, before it passed through the activation function
+            pre_activation_of_input : (N, *input_shape) pyopencl.array
+                The input, z_gpu, before it passed through the activation function
 
             Returns
             -------
-            (N, *output_shape) np.array
+            (N, *output_shape) pyopencl.array
                 The flattened representation of the input
 
             OR (if `output_only = False`)
 
-            (N, *input_shape) np.array, (N, *output_shape) np.array
-                The first np.array will store the output before it has been reshaped
-                The second np.array will store the output after it has been reshaped
+            (N, *input_shape) pyopencl.array, (N, *output_shape) pyopencl.array
+                The first pyopencl.array will store the output before it has been reshaped
+                The second pyopencl.array will store the output after it has been reshaped
 
             Notes
             -----
@@ -83,31 +83,31 @@ class Flatten(Layer):
         check_layer(self)
 
         if output_only:
-            return z.reshape(len(z), self.output_shape[0])
-        return pre_activation_of_input, z.reshape(len(z), self.output_shape[0])
+            return z_gpu.reshape(len(z_gpu), self.output_shape[0])
+        return pre_activation_of_input, z_gpu.reshape(len(z_gpu), self.output_shape[0])
 
-    def get_delta_backprop_(self, g_prime, new_delta, *args, **kwargs):
+    def get_delta_backprop_(self, g_prime_gpu, new_delta_gpu, *args, **kwargs):
         """ Returns the delta for the previous layer, delta^{k-1}_{m,j}.
 
             Parameters
             ----------
-            g_prime : (N, *input_shape) np.array
+            g_prime_gpu : (N, *input_shape) pyopencl.array
                 Should be the derivative of the ouput of the previous layer, g'_{k-1}(a^{k-1}_{m,j})
-            new_delta : (N, *output_shape) np.array
+            new_delta_gpu : (N, *output_shape) pyopencl.array
                 The delta for this layer, delta^k_{m, j}
 
             Returns
             -------
-            (N, *input_shape) np.array
+            (N, *input_shape) pyopencl.array
 
             Notes
             -----
-            Since this is a pass through layer (i.e. linear activation), g_prime = 1, and so can be ignored.
+            Since this is a pass through layer (i.e. linear activation), g_prime_gpu = 1, and so can be ignored.
             The key to this layer is that the delta of the k+1 layer needs to be reshaped
             for the k-1 layer
         """
         check_layer(self)
-        return new_delta.reshape(len(new_delta), *self.input_shape)
+        return new_delta_gpu.reshape(len(new_delta_gpu), *self.input_shape)
 
     def get_weight_grad_(self, *args, **kwargs):
         """ Returns the associated partial S/partial W^k, that is
