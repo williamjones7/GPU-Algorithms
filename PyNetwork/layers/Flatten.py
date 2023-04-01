@@ -34,7 +34,7 @@ class Flatten(Layer):
         self.input_shape = None
         self.output_shape = None
 
-    def build(self, previous_output_shape):
+    def build(self, device_context, device_queue, previous_output_shape):
         """ Built/initialised the layer
 
             Parameters
@@ -42,6 +42,8 @@ class Flatten(Layer):
             previous_output_shape : tuple
                 The shape of the input into this layer.
         """
+        self.context = device_context
+        self.queue = device_queue
 
         self.input_shape = previous_output_shape
         self.output_shape = (np.prod(previous_output_shape), )
