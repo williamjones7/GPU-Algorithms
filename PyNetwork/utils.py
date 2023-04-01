@@ -38,74 +38,77 @@ __kernel void add_vector(__global float *X, __global float *b, __global float *o
 
 //returns the sum of each columns
 
-__kernel void column_sums(__global float *delta, int output_width, __global float *bias_out){
+__kernel void column_sums(__global float *delta, int num_rows, __global float *bias_out){
     int i = get_global_id(0);
-    int input_width = get_global_size(0);
+    int num_cols = get_global_size(0);
     bias_out[i] = 0.0;
-    for (int k = 0; k < output_width; k++){
-        bias_out[i] += delta[k * input_width + i];
+    for (int k = 0; k < num_rows; k++){
+        bias_out[i] += delta[k * num_cols + i];
     }
 }
 """
 
 class ArrayMathsFunction:
     def __init__(self, context, queue):
-        self.context = context
-        self.queue = queue
-        self.program = cl.Program(context, array_functions_program).build()
+        ArrayMathsFunction.context = context
+        ArrayMathsFunction.queue = queue
+        ArrayMathsFunction.program = cl.Program(context, array_functions_program).build()
 
-    def naiveMatmul(self, X, Y):
+    @staticmethod
+    def naiveMatmul(x_gpu, y_gpu):
         '''
         "Naive" Matrix Multiplication
         '''
-        global_size = (X.shape[0], Y.shape[1])
+        global_size = (x_gpu.shape[0], y_gpu.shape[1])
         local_size = None
 
-        _, input_width = X.shape
-        matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        _, input_width = x_gpu.shape
+        matrix_out = cl_array.zeros(ArrayMathsFunction.queue, global_size, dtype=np.float32)
         
-        self.program.naive_matmul(self.queue, global_size, local_size, 
-                               X.data, Y.data, np.int32(input_width), matrix_out.data).wait()
+        ArrayMathsFunction.program.naive_matmul(ArrayMathsFunction.queue, global_size, local_size, 
+                               x_gpu.data, y_gpu.data, np.int32(input_width), matrix_out.data).wait()
         return matrix_out
 
-    def addVector(self, X, b):
+    @staticmethod
+    def addVector(x_gpu, b_gpu):
         '''
         Add a vector b to a matrix X
         '''
-        global_size = X.shape
+        global_size = x_gpu.shape
         local_size = None
-        matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        matrix_out = cl_array.zeros(ArrayMathsFunction.queue, global_size, dtype=np.float32)
         
-        self.program.add_vector(self.queue, global_size, local_size, 
-                               X.data, b.data, matrix_out.data).wait()
+        ArrayMathsFunction.program.add_vector(ArrayMathsFunction.queue, global_size, local_size, 
+                               x_gpu.data, b_gpu.data, matrix_out.data).wait()
         return matrix_out 
 
-    def columnSumUp(self, X):
+    @staticmethod
+    def columnSumUp(x_gpu):
         '''
         Returns the sum of each column
         '''
-        global_size = (X.shape[1], )
-        output_width, _ = X.shape
+        global_size = (x_gpu.shape[1], )
+        output_width, _ = x_gpu.shape
         local_size = None
-        matrix_out = cl_array.zeros(self.queue, global_size, dtype=np.float32)
+        matrix_out = cl_array.zeros(ArrayMathsFunction.queue, global_size, dtype=np.float32)
         
-        self.program.column_sums(self.queue, global_size, local_size, 
-                               X.data, np.int32(output_width), matrix_out.data).wait()
+        ArrayMathsFunction.program.column_sums(ArrayMathsFunction.queue, global_size, local_size, 
+                               x_gpu.data, np.int32(output_width), matrix_out.data).wait()
         return matrix_out 
 
+    @staticmethod
     # Implementation of np.sign in OpenCL
-    def sign(self, x):
+    def sign(x_gpu):
         '''
         Implementation of np.sign in OpenCL.
         Only works for 64-bit float number or number with higher precision.
         '''
-        sign_program = ElementwiseKernel(self.context,
+        sign_program = ElementwiseKernel(ArrayMathsFunction.context,
                                     "double *x, double *out",
                                     "out[i] = sign(x[i])",
                                     preamble='#define sign(x) (x > 0) ? 1 : -1'
                                     )
-        x_gpu = cl_array.to_device(self.queue, x)
 
         out = cl_array.zeros_like(x_gpu)
-        sign_program(x_gpu, out)
+        sign_program(x_gpu, out).wait()
         return out
