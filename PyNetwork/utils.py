@@ -11,7 +11,7 @@ def buffer_str(input_str, max_buffer=30):
     return input_str
 
 # C kernel for naive calculations
-naive_program = """
+array_functions_program = """
 //naive matrix multiplication
 __kernel void naive_matmul(__global float *X, __global float *Y, int input_width, __global float *out){
     int i = get_global_id(0);
@@ -48,11 +48,11 @@ __kernel void column_sums(__global float *delta, int output_width, __global floa
 }
 """
 
-class SingleLayer:
+class ArrayMathsFunction:
     def __init__(self, context, queue):
         self.context = context
         self.queue = queue
-        self.program = cl.Program(context, naive_program).build()
+        self.program = cl.Program(context, array_functions_program).build()
 
     def naiveMatmul(self, X, Y):
         '''
