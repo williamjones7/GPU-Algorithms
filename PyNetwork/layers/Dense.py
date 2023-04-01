@@ -71,7 +71,7 @@ class Dense(Layer):
 
         self.built = False
 
-    def build(self, device_context, device_queue, previous_output_shape):
+    def build(self, context, queue, previous_output_shape):
         """ Initialises the weight and bias units
 
             Parameters
@@ -79,8 +79,8 @@ class Dense(Layer):
             previous_output_shape : 1 tuple of int
                 The output shape of the previous layer. This will dictate the size of the weight matrix
         """
-        self.context = device_context
-        self.queue = device_queue
+        self.context = context
+        self.queue = queue
 
         self.output_shape = (self.hidden_nodes, )
         self.input_shape = previous_output_shape
@@ -101,7 +101,7 @@ class Dense(Layer):
 
         self.built = True
 
-        self.gpu_layer = utils.SingleLayer(self.context, self.queue)
+        self.gpu_maths = utils.ArrayMathsFunction(self.context, self.queue)
 
     def predict(self, z, output_only=True, **kwargs):
         """ Returns the output of this layer
@@ -135,8 +135,8 @@ class Dense(Layer):
         W_F_T = cl_array.transpose(self.W_F)
         z_gpu = cl_array.to_device(self.queue, z)
 
-        prod = self.gpu_layer.naiveMatmul(z_gpu, W_F_T)
-        out_a = self.gpu_layer.addVector(prod, self.b)
+        prod = self.gpu_maths.naiveMatmul(z_gpu, W_F_T)
+        out_a = self.gpu_maths.addVector(prod, self.b)
 
         if output_only:
             return self.activation_function_(out_a)
@@ -168,7 +168,7 @@ class Dense(Layer):
         g_prime_gpu = cl_array.to_device(self.queue, g_prime)
         new_delta_gpu = cl_array.to_device(self.queue, new_delta)
 
-        delta_result = g_prime_gpu * self.gpu_layer.naiveMatmul(new_delta_gpu, self.W)
+        delta_result = g_prime_gpu * self.gpu_maths.naiveMatmul(new_delta_gpu, self.W)
         return delta_result
 
     def get_weight_grad_(self, delta, prev_z):
@@ -196,8 +196,8 @@ class Dense(Layer):
         delta_gpu_F = cl_array.to_device(self.queue, np.asfortranarray(delta))
         delta_gpu_T = cl_array.transpose(delta_gpu_F)
 
-        weight_grad = self.gpu_layer.naiveMatmul(delta_gpu_T, prev_z_gpu)
-        bias_grad = self.gpu_layer.columnSumUp(delta_gpu)
+        weight_grad = self.gpu_maths.naiveMatmul(delta_gpu_T, prev_z_gpu)
+        bias_grad = self.gpu_maths.columnSumUp(delta_gpu)
 
         return bias_grad, weight_grad
 
@@ -219,7 +219,7 @@ class Dense(Layer):
  
         regularization_grad = cl_array.zeros(self.queue, self.W.shape, dtype=np.float32)
         if self.l1 > 0:
-            regularization_grad += self.l1 * utils.gpu_layer.sign(self.W)
+            regularization_grad += self.l1 * utils.gpu_maths.sign(self.W)
         if self.l2 > 0:
             regularization_grad += self.l2 * self.W
 
