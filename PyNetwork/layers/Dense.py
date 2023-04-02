@@ -1,9 +1,9 @@
 import numpy as np
 
-from PyNetwork import get_activation_function
+from PyNetwork import ActivationFunctions
 from PyNetwork.layers import Layer
 from PyNetwork.validation import check_layer
-from PyNetwork import utils
+from PyNetwork.utils import utils
 
 import pyopencl as cl
 import pyopencl.array as cl_array
@@ -23,11 +23,9 @@ class Dense(Layer):
             The shape of the output of this layer
         input_shape : (m, ) tuple
             The shape of the input of this layer
-        W : (n, m) pyopencl.array
+        W_gpu : (n, m) pyopencl.array
             The weight matrix
-        W_F : (n, m) pyopencl.array
-            The F-contiguous weight matrix
-        b : (n, ) pyopencl.array
+        b_gpu : (n, ) pyopencl.array
             The bias unit
 
         Notes
@@ -55,8 +53,8 @@ class Dense(Layer):
         self.output_shape = None
         self.input_shape = None
         
-        self.W = None
-        self.b = None
+        self.W_gpu = None
+        self.b_gpu = None
         
         if trainable_mask_gpu is not None:
             assert isinstance(trainable_mask_gpu, cl.ndarray)
@@ -92,17 +90,18 @@ class Dense(Layer):
         limit = np.sqrt(6 / (np.prod(self.input_shape) + np.prod(self.output_shape)))
         W = np.random.uniform(low=-limit, high=limit, size=(*self.output_shape, *previous_output_shape))
 
-        self.W = cl_array.to_device(self.queue, W)
-        self.W_F = cl_array.to_device(self.queue, np.asfortranarray(W)) 
-        self.b = cl_array.zeros(self.queue, self.output_shape, dtype=np.float32)
+        self.W_gpu = cl_array.to_device(self.queue, W)
+        self.b_gpu = cl_array.zeros(self.queue, self.output_shape, dtype=np.float32)
         
         if self.trainable_mask_gpu is not None:
-            assert self.trainable_mask_gpu.shape == self.W.shape, f"Trainable mask {self.trainable_mask_gpu.shape} must have the " \
-                                                              f"same shape as the weight {self.W.shape}"                                                  
+            assert self.trainable_mask_gpu.shape == self.W_gpu.shape, f"Trainable mask {self.trainable_mask_gpu.shape} must have the " \
+                                                              f"same shape as the weight {self.W_gpu.shape}"                                                  
 
         self.built = True
 
-        self.gpu_maths = utils.ArrayMathsFunction(self.context, self.queue)
+        self.gpu_maths = utils.ArrayFunctions(self.context, self.queue)
+        self.gpu_matmul = utils.NaiveMatMul(self.context, self.queue)
+        self.activation = ActivationFunctions(self.context, self.queue)
 
     def predict(self, z_gpu, output_only=True, **kwargs):
         """ Returns the output of this layer
@@ -133,10 +132,10 @@ class Dense(Layer):
         check_layer(self)
 
         # store as F-contiguous for transpose and accuracy
-        W_F_T = cl_array.transpose(self.W_F)
+        W_gpu_T = cl_array.transpose(self.W_gpu)
 
-        prod = self.gpu_maths.naiveMatmul(z_gpu, W_F_T)
-        out_a = self.gpu_maths.addVector(prod, self.b)
+        prod = self.gpu_matmul.naiveMatmul(z_gpu, W_gpu_T)
+        out_a = self.gpu_maths.addVector(prod, self.b_gpu)
 
         if output_only:
             return self.activation_function_(out_a)
@@ -148,7 +147,7 @@ class Dense(Layer):
             Notes
             -----
             We want to return delta^{n-1} because the `sequential` class does not have access to the
-            weights, W. But it does know the values of g'_{n-1} and delta^n, due to forward propagation
+            weights, W_gpu. But it does know the values of g'_{n-1} and delta^n, due to forward propagation
             and the backwards nature of the back propagation algorithm.
 
             Parameters
@@ -165,11 +164,11 @@ class Dense(Layer):
         """
         check_layer(self)
 
-        delta_result = g_prime_gpu * self.gpu_maths.naiveMatmul(new_delta_gpu, self.W)
+        delta_result = g_prime_gpu * self.gpu_matmul.naiveMatmul(new_delta_gpu, self.W_gpu)
         return delta_result
 
     def get_weight_grad_(self, delta_gpu, prev_z_gpu):
-        """ Returns the associated partial S/partial W^n, that is
+        """ Returns the associated partial S/partial W_gpu^n, that is
             the gradient with respect to the weight matrix in the kth layer
 
             Parameters
@@ -189,7 +188,7 @@ class Dense(Layer):
         check_layer(self)
         delta_gpu_T = cl_array.transpose(delta_gpu)
 
-        weight_grad = self.gpu_maths.naiveMatmul(delta_gpu_T, prev_z_gpu)
+        weight_grad = self.gpu_matmul.naiveMatmul(delta_gpu_T, prev_z_gpu)
         bias_grad = self.gpu_maths.rowSumUp(delta_gpu)
 
         return bias_grad, weight_grad
@@ -206,22 +205,22 @@ class Dense(Layer):
         """
         check_layer(self)
  
-        regularization_grad = cl_array.zeros(self.queue, self.W.shape, dtype=np.float32)
+        regularization_grad = cl_array.zeros(self.queue, self.W_gpu.shape, dtype=np.float32)
         if self.l1 > 0:
-            regularization_grad += self.l1 * utils.gpu_maths.sign(self.W)
+            regularization_grad += self.l1 * utils.gpu_maths.clarray_sign(self.W_gpu)
         if self.l2 > 0:
-            regularization_grad += self.l2 * self.W
+            regularization_grad += self.l2 * self.W_gpu
 
         if self.trainable_mask_gpu is None:
-            self.W -= (weight_updates_gpu + regularization_grad)
+            self.W_gpu -= (weight_updates_gpu + regularization_grad)
         else:
-            self.W -= (weight_updates_gpu + regularization_grad) * self.trainable_mask_gpu
+            self.W_gpu -= (weight_updates_gpu + regularization_grad) * self.trainable_mask_gpu
             
-        self.b -= bias_updates_gpu
+        self.b_gpu -= bias_updates_gpu
 
     def get_weights(self):
         check_layer(self)
-        return self.W, self.b
+        return self.W_gpu, self.b_gpu
 
     def summary_(self):
         check_layer(self)
@@ -229,7 +228,7 @@ class Dense(Layer):
 
     @property
     def activation_function_(self):
-        return get_activation_function(self.activation_function, **self.activation_kwargs)
+        return self.activation.get_activation_function(self.activation_function, **self.activation_kwargs)
 
     def __str__(self):
         return f'Dense: Output Shape {(None, *self.output_shape)}'

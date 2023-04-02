@@ -5,8 +5,8 @@ import pyopencl.array as cl_array
 from pyopencl import clmath
 from PyNetwork.validation import check_layer
 from PyNetwork.layers import Layer
-from PyNetwork import get_activation_function
-from PyNetwork import utils
+from PyNetwork import ActivationFunctions
+from PyNetwork.utils import utils
 
 
 class BatchNormGrads:
@@ -239,6 +239,7 @@ class BatchNorm(Layer):
 
         self.context = context
         self.queue = queue
+        self.activation = ActivationFunctions(self.context, self.queue)
 
     def predict(self, z, output_only=True, **kwargs):
         """ Returns the output of this layer
@@ -356,7 +357,7 @@ class BatchNorm(Layer):
 
     @property
     def activation_function_(self):
-        return get_activation_function(self.activation_function)
+        return self.activation.get_activation_function(self.activation_function)
 
     def __str__(self):
         return f'Batch Norm; built = {self.built}'

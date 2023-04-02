@@ -2,10 +2,10 @@ import numpy as np
 import random
 
 from PyNetwork.layers import Layer
-from PyNetwork import get_error_function, get_metric_function
+from PyNetwork import ErrorFunctions, get_metric_function
 from PyNetwork.optimizers import Optimizer, get_optimizer
 from PyNetwork.layers import Flatten, Input, BatchNorm
-from .utils import buffer_str
+from .utils.utils import buffer_str
 
 
 class Sequential:
@@ -229,7 +229,7 @@ class Sequential:
 
     @property
     def loss(self):
-        return get_error_function(self.loss_function)
+        return ErrorFunctions.get_error_function(self.loss_function)
 
     @property
     def metric(self):

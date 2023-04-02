@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
-from PyNetwork import get_activation_function
+from PyNetwork import ActivationFunctions
 from PyNetwork.layers import Layer
 from PyNetwork.validation import check_layer
 
@@ -254,6 +254,8 @@ class Conv_2D(Layer):
         self.b = np.zeros(self.filter_num)
 
         self.built = True
+        
+        self.activation = ActivationFunctions(self.context, self.queue)
 
     def predict(self, z, output_only=True, pre_activation_of_input=None):
         """ Returns the output of this layer
@@ -378,7 +380,7 @@ class Conv_2D(Layer):
 
     @property
     def activation_function_(self):
-        return get_activation_function(self.activation_function, **self.activation_kwargs)
+        return self.activation.get_activation_function(self.activation_function, **self.activation_kwargs)
 
     def __str__(self):
         return f'Conv 2D {self.filter_num} x {self.filter_spatial_shape}'

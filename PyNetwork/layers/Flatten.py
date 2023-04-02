@@ -1,6 +1,6 @@
 import numpy as np
 
-from PyNetwork import get_activation_function
+from PyNetwork import ActivationFunctions
 from PyNetwork.layers import Layer
 
 from PyNetwork.validation import check_layer
@@ -144,7 +144,7 @@ class Flatten(Layer):
 
     @property
     def activation_function_(self):
-        return get_activation_function(self.activation_function)
+        return ActivationFunctions.get_activation_function(self.activation_function)
 
     def __str__(self):
         return f'Flatten'
