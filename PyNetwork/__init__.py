@@ -1,6 +1,6 @@
 # Activation and Cost Functions
-from PyNetwork.functions import get_activation_function
-from PyNetwork.functions import get_error_function
+from PyNetwork.functions import ActivationFunctions
+from PyNetwork.functions import ErrorFunctions
 from PyNetwork.functions import get_metric_function
 
 # Sequential Class
