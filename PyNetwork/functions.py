@@ -30,12 +30,10 @@ def GPU_sum(queue, x):
 
 def get_activation_function(name, **kwargs):
     """ Returns the function of the given name
-
         Parameters
         ----------
         name : str
             The name of the desired function
-
         Raises
         ------
         Exception
@@ -43,35 +41,48 @@ def get_activation_function(name, **kwargs):
     """
 
     if name == 'relu':
-        def relu(x, grad=False):
-            if grad:
-                return (x > 0).astype(int)
+        def relu(x_gpu, grad=False):
+            x_gpu_precise = x_gpu.astype(np.float64)
+            relu_program = ElementwiseKernel(context,
+                                 "double *x, double *out",
+                                 "out[i] = x[i] > 0 ? x[i] : 0.0",
+                                 "relu")
 
-            x = np.array(x)
-            x[x < 0] = 0
-            return x
+            relu_grad = ElementwiseKernel(context,
+                                 "double *x, double *out",
+                                 "out[i] = x[i] > 0 ? 1.0 : 0.0",
+                                 "relu")
+            out_gpu = cl_array.empty_like(x_gpu_precise)
+
+            if grad:
+                relu_grad(x_gpu_precise, out_gpu).wait()
+                return out_gpu.astype(np.float32)
+            relu_program(x_gpu_precise, out_gpu).wait()
+            return out_gpu.astype(np.float32)
         # END def relu
 
         return relu
-    elif name == 'softmax':
-        def softmax(x, grad=False):
-            if grad:
-                softmax_val = softmax(x, grad=False)
-                return softmax_val*(1 - softmax_val)
 
-            z = x - np.max(x, axis=-1, keepdims=True)
-            numerator = np.exp(z)
-            denominator = np.sum(numerator, axis=-1, keepdims=True)
-            return numerator / denominator
-        # END def softmax
-
-        return softmax
     elif name == 'linear':
-        def linear(x, grad=False):
+        def linear(x_gpu, grad=False):
             if grad:
-                return 1
-            return x
+                return 1 + cl_array.zeros_like(x_gpu)
+            return x_gpu
         return linear
+        
+#    elif name == 'softmax':
+#        def softmax(x, grad=False):
+#            if grad:
+#                softmax_val = softmax(x, grad=False)
+#                return softmax_val*(1 - softmax_val)
+#
+#            z = x - np.max(x, axis=-1, keepdims=True)
+#            numerator = np.exp(z)
+#            denominator = np.sum(numerator, axis=-1, keepdims=True)
+#            return numerator / denominator
+#        # END def softmax
+#
+#        return softmax
 
     else:
         raise Exception(f'{name} is not a defined function.')
@@ -79,12 +90,10 @@ def get_activation_function(name, **kwargs):
 
 def get_error_function(name):
     """ Returns the function of the given name
-
         Parameters
         ----------
         name : str
             The name of the desired function
-
         Raises
         ------
         Exception
@@ -93,37 +102,54 @@ def get_error_function(name):
     if name == 'mse':
         def mse(predictions, targets, grad = False):
             if grad:
-                return 2*(predictions - targets)
+                return (predictions - targets) * 2
             N = predictions.shape[0]
-            return np.sum(((predictions - targets)**2)/2)/N
+            RS = ((predictions - targets) * (predictions - targets))/2
+            return cl_array.sum(RS)/N
         return mse
     elif name == 'cross_entropy':
         def cross_entropy(predictions, targets, epsilon=1e-12, grad=False):
             """ Computes cross entropy between targets (encoded as one-hot vectors) and predictions.
-
                 Parameters
                 ----------
                     predictions : (N, k) np.array
                     targets     : (N, k) np.array
-
                 Returns
                 -------
                     float
                         If grad = False then the cross_entropy score is retuned
-
                     OR
-
                     (N, k) np.array
                         If grad = True then the gradient of the output is returned
             """
-            predictions = np.clip(predictions, epsilon, 1. - epsilon)
+            predictions_precise = predictions.astype(np.float64)
+            targets_precise = targets.astype(np.float64)
+            clip_clarray_min = ElementwiseKernel(context,
+                                                 "double *x, double threshold",
+                                                 "x[i] = x[i] > threshold ? "
+                                                 "x[i] : threshold",
+                                                 "clip_in_place_elementwise")
+            clip_clarray_max = ElementwiseKernel(context,
+                                                 "double *x, double threshold",
+                                                 "x[i] = x[i] < threshold ? "
+                                                 "x[i] : threshold",
+                                                 "clip_in_place_elementwise")
+            def clip_clarray(array, min, max):
+
+                if min is not None:
+                    clip_clarray_min(array, min)
+                if max is not None:
+                    clip_clarray_max(array, max)
+
+            clip_clarray(predictions_precise, epsilon, 1.0 - epsilon)
 
             if grad:
-                return -targets/predictions + (1 - targets)/(1 - predictions)
+                return (-targets_precise / predictions_precise + (1.0 - targets_precise) / (1.0 - predictions_precise)).astype(np.float32)
 
-            N = predictions.shape[0]
-            ce = -np.sum(targets*np.log(predictions+1e-9))/N
-            return ce
+            N = predictions_precise.shape[0]
+            MP = targets_precise * clmath.log(predictions_precise + 1e-9)
+            ce = -cl_array.sum(MP) / N
+            return ce.astype(np.float32)
         return cross_entropy
     else:
         raise Exception(f'{name} is not a defined function.')
