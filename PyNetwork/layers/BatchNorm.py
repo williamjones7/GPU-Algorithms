@@ -138,8 +138,9 @@ class BatchNormGrads:
         c = (-1 / clmath.sqrt(sigma_gpu ** 2 + epsilon))
 
         return  c * BatchNormGrads.gpu_maths.rowSumUp(dz_hat_gpu_) + dsigma2_gpu_ * BatchNormGrads.gpu_maths.rowMean(-2 * deviation)
+    
     @staticmethod
-    def dz(z_gpu, new_delta_gpu, gamma_gpu, epsilon, mu=None, sigma=None):
+    def dz(z_gpu, new_delta_gpu, gamma_gpu, epsilon, mu_gpu=None, sigma_gpu=None):
         """ Returns the partial derivative with respect to the input: dS/dZ^{n-1}
 
             Parameters
@@ -167,12 +168,13 @@ class BatchNormGrads:
         if sigma_gpu is None:
             sigma_gpu = BatchNormGrads.gpu_maths.rowStd(z_gpu)
         m = len(z_gpu)
-
+        
+        deviation = BatchNormGrads.gpu_maths.addVector(z_gpu, -mu_gpu)
         dz_hat_gpu_ = BatchNormGrads.dz_hat(new_delta_gpu, gamma_gpu)
         dsigma2_gpu_ = BatchNormGrads.dsigma2(z_gpu, dz_hat_gpu_, epsilon, mu_gpu, sigma_gpu)
         dmu_gpu_ = BatchNormGrads.dmu(z_gpu, dz_hat_gpu_, epsilon, mu_gpu, sigma_gpu, dsigma2_gpu_)
 
-        return dz_hat_gpu_ / clmath.sqrt(sigma_gpu**2 + epsilon) + dsigma2_gpu_ * 2 * (z_gpu - mu_gpu)/m + dmu_gpu_/m
+        return dz_hat_gpu_ / clmath.sqrt(sigma_gpu ** 2 + epsilon) + dsigma2_gpu_ * 2 * deviation / m + dmu_gpu_ / m
 
 
 class BatchNorm(Layer):

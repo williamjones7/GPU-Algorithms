@@ -191,7 +191,7 @@ class ArrayMathsFunction:
     @staticmethod
     def rowStd(x_gpu):
         '''
-        Returns the mean of each row.
+        Returns the standard deviation of each row.
         Implementation of np.std(x, axis=0) in OpenCL.
         '''
         global_size = (x_gpu.shape[1], )
