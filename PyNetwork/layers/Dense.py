@@ -190,7 +190,7 @@ class Dense(Layer):
         delta_gpu_T = cl_array.transpose(delta_gpu)
 
         weight_grad = self.gpu_maths.naiveMatmul(delta_gpu_T, prev_z_gpu)
-        bias_grad = self.gpu_maths.columnSumUp(delta_gpu)
+        bias_grad = self.gpu_maths.rowSumUp(delta_gpu)
 
         return bias_grad, weight_grad
 

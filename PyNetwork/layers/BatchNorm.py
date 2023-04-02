@@ -1,8 +1,12 @@
 import numpy as np
+import pyopencl as cl
+import pyopencl.array as cl_array
 
+from pyopencl import clmath
 from PyNetwork.validation import check_layer
 from PyNetwork.layers import Layer
 from PyNetwork import get_activation_function
+from PyNetwork import utils
 
 
 class BatchNormGrads:
@@ -18,153 +22,157 @@ class BatchNormGrads:
         5. dsigma2 = dS/d(sigma^2)
         6. dmu = dS/d(mu)
     """
+    def __init__(self, context, queue):
+        BatchNormGrads.context = context
+        BatchNormGrads.queue = queue
+        BatchNormGrads.gpu_maths = utils.ArrayMathsFunction(context, queue)
 
     @staticmethod
-    def dgamma(new_delta, z_hat):
+    def dgamma(new_delta_gpu, z_hat_gpu):
         """ Returns ds/d(gamma)
 
             Parameters
             ----------
-            new_delta : (N, ...) np.array
+            new_delta_gpu : (N, ...) pyopencl.array
                 Should be delta^{k}
-            z_hat : (N, ...) np.array
+            z_hat_gpu : (N, ...) pyopencl.array
                 Should be the normalised input of this layer
 
             Returns
             -------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
         """
-        # This can probably be speed up by using einsum, so that an intermediate np.array
-        # isn't created
-        return np.sum(new_delta * z_hat, axis=0)
+        return BatchNormGrads.gpu_maths.rowSumUp(new_delta_gpu * z_hat_gpu)
 
     @staticmethod
-    def dbeta(new_delta):
+    def dbeta(new_delta_gpu):
         """ Returns ds/d(beta)
 
             Parameters
             ----------
-            new_delta : (N, ...) np.array
+            new_delta_gpu : (N, ...) pyopencl.array
                 Should be delta^{k}
 
             Returns
             -------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
         """
-
-        return np.sum(new_delta, axis=0)
+        return BatchNormGrads.gpu_maths.rowSumUp(new_delta_gpu)
 
     @staticmethod
-    def dz_hat(new_delta, gamma):
+    def dz_hat(new_delta_gpu, gamma_gpu):
         """ Returns dS/d(z_hat) - The gradient with respect to the normalised input of
             the batch-norm layer
 
             Parameters
             ----------
-            new_delta : (N, ...) np.array
+            new_delta_gpu : (N, ...) pyopencl.array
                 Should be delta^{k}
-            gamma : (...) np.array
+            gamma_gpu : (...) pyopencl.array
 
             Return
             ------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
         """
-        return new_delta * gamma
+        return BatchNormGrads.gpu_maths.mulVector(new_delta_gpu, gamma_gpu)
 
     @staticmethod
-    def dsigma2(z, dz_hat_, epsilon, mu=None, sigma=None):
+    def dsigma2(z_gpu, dz_hat_gpu_, epsilon, mu_gpu=None, sigma_gpu=None):
         """ Returns dS/d(sigma^2)
 
             Parameters
             ----------
-            z : (N, ...) np.array
+            z_gpu : (N, ...) pyopencl.array
                 The input of this layer: z^{k-1}
-            dz_hat_ : (N, ...) np.array
+            dz_hat_gpu_ : (N, ...) pyopencl.array
                 The gradient with respect to the normalised input: dS/d(z_hat^{k-1})
             epsilon : float
 
-            mu : (...) np.array, optional
+            mu_gpu : (...) pyopencl.array, optional
                 The mean of the input. If None, then it will be computed
-            sigma : (...) np.array, optional
+            sigma_gpu : (...) pyopencl.array, optional
                 The std of the input. If None, then it will be computed
 
             Returns
             -------
-            (...) np.array
+            (...) pyopencl.array
         """
-        if mu is None:
-            mu = np.mean(z, axis=0)
-        if sigma is None:
-            sigma = np.std(z, axis=0)
+        if mu_gpu is None:
+            mu_gpu = BatchNormGrads.gpu_maths.rowMean(z_gpu)
+        if sigma_gpu is None:
+            sigma_gpu = BatchNormGrads.gpu_maths.rowStd(z_gpu)
 
-        c = (-0.5 * (sigma ** 2 + epsilon) ** (-3 / 2))
-        return c * np.sum(dz_hat_ * (z - mu), axis=0)
+        deviation = BatchNormGrads.gpu_maths.addVector(z_gpu, -mu_gpu)
+        c = (-0.5 * (sigma_gpu ** 2 + epsilon) ** (-3 / 2))
+        return c * BatchNormGrads.gpu_maths.rowSumUp(dz_hat_gpu_ * deviation)
 
     @staticmethod
-    def dmu(z, dz_hat_, epsilon, mu=None, sigma=None, dsigma2_=None):
+    def dmu(z_gpu, dz_hat_gpu_, epsilon, mu_gpu=None, sigma_gpu=None, dsigma2_gpu_=None):
         """ Returns dS/dmu
 
             Parameters
             ----------
-            z : (N, ...) np.array
+            z_gpu : (N, ...) pyopencl.array
                 The input of this layer: z^{k-1}
-            dz_hat_ : (N, ...) np.array
+            dz_hat_gpu_ : (N, ...) pyopencl.array
                 The gradient with respect to the normalised input: dS/d(z_hat^{k-1})
             epsilon : float
 
-            mu : (...) np.array, optional
+            mu_gpu : (...) pyopencl.array, optional
                 The mean of the input. If None, then it will be computed
-            sigma : (...) np.array, optional
+            sigma_gpu : (...) pyopencl.array, optional
                 The std of the input. If None, then it will be computed
-            dsigma2_ : (...) np.array, optional
+            dsigma2_gpu_ : (...) pyopencl.array, optional
                 This should be the gradient ds/d(sigma^2). If it is set to None then it
                 will be computed when this function is called
         """
 
-        if mu is None:
-            mu = np.mean(z, axis=0)
-        if sigma is None:
-            sigma = np.std(z, axis=0)
-        if dsigma2_ is None:
-            dsigma2_ = BatchNormGrads.dsigma2(z, dz_hat_, epsilon, mu, sigma)
+        if mu_gpu is None:
+            mu_gpu = BatchNormGrads.gpu_maths.rowMean(z_gpu)
+        if sigma_gpu is None:
+            sigma_gpu = BatchNormGrads.gpu_maths.rowStd(z_gpu)
+        if dsigma2_gpu_ is None:
+            dsigma2_gpu_ = BatchNormGrads.dsigma2(z_gpu, dz_hat_gpu_, epsilon, mu_gpu, sigma_gpu)
+        
+        deviation = BatchNormGrads.gpu_maths.addVector(z_gpu, -mu_gpu)
+        c = (-1 / clmath.sqrt(sigma_gpu ** 2 + epsilon))
 
-        return (-1 / np.sqrt(sigma**2 + epsilon))*np.sum(dz_hat_, axis=0) + dsigma2_ * np.mean(-2*(z - mu), axis=0)
-
+        return  c * BatchNormGrads.gpu_maths.rowSumUp(dz_hat_gpu_) + dsigma2_gpu_ * BatchNormGrads.gpu_maths.rowMean(-2 * deviation)
     @staticmethod
-    def dz(z, new_delta, gamma, epsilon, mu=None, sigma=None):
+    def dz(z_gpu, new_delta_gpu, gamma_gpu, epsilon, mu=None, sigma=None):
         """ Returns the partial derivative with respect to the input: dS/dZ^{n-1}
 
             Parameters
             ----------
-            z : (N, ...) np.array
+            z_gpu : (N, ...) pyopencl.array
                 The input of this layer: z^{n-1}
-            new_delta : (N, ...) np.array
+            new_delta_gpu : (N, ...) pyopencl.array
                 The back-prop gradient: delta^{n}
-            gamma : (...) np.array
+            gamma_gpu : (...) pyopencl.array
             epsilon : float
                 Arbitrarily small float to prevent division by 0 error
 
-            mu : (...) np.array, optional
+            mu_gpu : (...) pyopencl.array, optional
                 The mean of the input. If None, then it will be computed
-            sigma : (...) np.array, optional
+            sigma_gpu : (...) pyopencl.array, optional
                 The std of the input. If None, then it will be computed
 
             Returns
             -------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
         """
 
-        if mu is None:
-            mu = np.mean(z, axis=0)
-        if sigma is None:
-            sigma = np.std(z, axis=0)
-        m = len(z)
+        if mu_gpu is None:
+            mu_gpu = BatchNormGrads.gpu_maths.rowMean(z_gpu)
+        if sigma_gpu is None:
+            sigma_gpu = BatchNormGrads.gpu_maths.rowStd(z_gpu)
+        m = len(z_gpu)
 
-        dz_hat_ = BatchNormGrads.dz_hat(new_delta, gamma)
-        dsigma2_ = BatchNormGrads.dsigma2(z, dz_hat_, epsilon, mu, sigma)
-        dmu_ = BatchNormGrads.dmu(z, dz_hat_, epsilon, mu, sigma, dsigma2_)
+        dz_hat_gpu_ = BatchNormGrads.dz_hat(new_delta_gpu, gamma_gpu)
+        dsigma2_gpu_ = BatchNormGrads.dsigma2(z_gpu, dz_hat_gpu_, epsilon, mu_gpu, sigma_gpu)
+        dmu_gpu_ = BatchNormGrads.dmu(z_gpu, dz_hat_gpu_, epsilon, mu_gpu, sigma_gpu, dsigma2_gpu_)
 
-        return dz_hat_ / np.sqrt(sigma**2 + epsilon) + dsigma2_*2*(z - mu)/m + dmu_/m
+        return dz_hat_gpu_ / clmath.sqrt(sigma_gpu**2 + epsilon) + dsigma2_gpu_ * 2 * (z_gpu - mu_gpu)/m + dmu_gpu_/m
 
 
 class BatchNorm(Layer):
@@ -182,9 +190,9 @@ class BatchNorm(Layer):
             The shape of the input of this layer
         output_shape : k tuple
             The shape of the output of this layer
-        gamma : np.array (of dimension k)
+        gamma : pyopencl.array (of dimension k)
             The scaling factor of the elements
-        beta : np.array (of dimension k)
+        beta : pyopencl.array (of dimension k)
             The bias units for the elements
 
         built : bool
@@ -211,7 +219,7 @@ class BatchNorm(Layer):
         self.gamma = None
         self.beta = None
 
-    def build(self, previous_output_shape):
+    def build(self, previous_output_shape, context, queue):
         """ Initialise Attributes `gamma` and `beta`
 
             Parameters
@@ -223,16 +231,19 @@ class BatchNorm(Layer):
         self.output_shape = previous_output_shape
 
         self.gamma = np.ones(self.input_shape)
-        self.beta = np.zeros(self.input_shape)
+        self.beta = cl_array.zeros(self.queue, self.input_shape)
 
         self.built = True
+
+        self.context = context
+        self.queue = queue
 
     def predict(self, z, output_only=True, **kwargs):
         """ Returns the output of this layer
 
             Parameters
             ----------
-            z : (N, ...) np.array
+            z : (N, ...) pyopencl.array
                 z is assumed to be a list of all the inputs to be forward propagated. In particular
                 it is assumed that the first index of z is the index that inputs is accessed by
             output_only : bool, optional
@@ -242,15 +253,15 @@ class BatchNorm(Layer):
 
             Returns
             -------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
                 The final output of the layer, post activation
 
             OR (if `output_only = False`)
 
-            (N, ...) np.array, (N, ...) np.array
-                The first np.array will store the output before it is passed through the activation
+            (N, ...) pyopencl.array, (N, ...) pyopencl.array
+                The first pyopencl.array will store the output before it is passed through the activation
                 function.
-                The second np.array will store the output after it has passed through the
+                The second pyopencl.array will store the output after it has passed through the
                 activation function.
 
             Notes
@@ -274,16 +285,16 @@ class BatchNorm(Layer):
 
             Parameters
             ----------
-            g_prime : (N, ...) np.array
+            g_prime : (N, ...) pyopencl.array
                 Should be the derivative of the ouput of the previous layer, g'_{k-1}(a^{k-1}_{m,j})
-            new_delta : (N, ...) np.array
+            new_delta : (N, ...) pyopencl.array
                 The delta for this layer, delta^k_{m, j}
-            prev_z : (N, ...) np.array
+            prev_z : (N, ...) pyopencl.array
                 The input for this layer, z^{k-1}
 
             Returns
             -------
-            (N, ...) np.array
+            (N, ...) pyopencl.array
                 Returns delta of the previous layer, delta^{k-1}
 
             Notes
@@ -302,16 +313,16 @@ class BatchNorm(Layer):
 
             Parameters
             ----------
-            delta : (N, ...) np.array
+            delta : (N, ...) pyopencl.array
                 Should be delta^k
-            prev_z : (N, ...) np.array
+            prev_z : (N, ...) pyopencl.array
                 The input of this layer: z^{k-1}
 
             Returns
             -------
-            (...) np.array, (...) np.array
-                The first np.array is dS/d(beta)
-                The second np.array is dS/d(gamma)
+            (...) pyopencl.array, (...) pyopencl.array
+                The first pyopencl.array is dS/d(beta)
+                The second pyopencl.array is dS/d(gamma)
         """
         check_layer(self)
 
@@ -323,9 +334,9 @@ class BatchNorm(Layer):
 
             Parameters
             ----------
-            beta_updates : np.array (of dimension k)
+            beta_updates : pyopencl.array (of dimension k)
                 Should be dS/d(beta), as scheduled by the optimizer
-            gamma_updates : np.array (of dimension k)
+            gamma_updates : pyopencl.array (of dimension k)
                 Should be dS/d(gamma), as scheduled by the optimizer
         """
         check_layer(self)
