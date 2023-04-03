@@ -131,7 +131,6 @@ class Dense(Layer):
         """
         check_layer(self)
 
-        # store as F-contiguous for transpose and accuracy
         W_gpu_T = cl_array.transpose(self.W_gpu)
 
         prod = self.gpu_matmul.naiveMatmul(z_gpu, W_gpu_T)
