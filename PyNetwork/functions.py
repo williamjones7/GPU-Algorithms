@@ -7,22 +7,22 @@ from pyopencl import clmath
 from PyNetwork import utils
 from PyNetwork.utils import ArrayFunctions
 
-# platform = cl.get_platforms()
-# devices = platform[0].get_devices()
-# context = cl.Context(devices)
-# queue = cl.CommandQueue(context)
-
 def GPU_sqrt(queue, x):
     x_gpu = cl_array.to_device(queue, x)
-    return clmath.sqrt(x_gpu)
+    x_gpu_precise = x_gpu.astype(np.float64)
+    return clmath.sqrt(x_gpu_precise,queue=queue)
 
 def GPU_max(queue, x):
     x_gpu = cl_array.to_device(queue,x)
-    return cl_array.max(x_gpu)
+    x_gpu_precise = x_gpu.astype(np.float64)
+    return cl_array.max(x_gpu_precise,queue=queue)
 
 def GPU_sum(queue, x):
     x_gpu = cl_array.to_device(queue,x)
-    return cl_array.sum(x_gpu,queue)
+    x_gpu_precise = x_gpu.astype(np.float64)
+    return cl_array.sum(x_gpu_precise,queue=queue)
+
+
 
 class ActivationFunctions:
     def __init__(self, context, queue):
