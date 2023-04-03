@@ -95,7 +95,7 @@ class ArrayFunctions:
     @staticmethod
     def mulVector(x_gpu, b_gpu):
         '''
-        Add a vector b to a matrix X
+        Multiply a matrix X by a vector b
         '''
         global_size = x_gpu.shape
         local_size = None
@@ -108,7 +108,7 @@ class ArrayFunctions:
     @staticmethod
     def divVector(x_gpu, b_gpu):
         '''
-        Add a vector b to a matrix X
+        Divide a matrix X by a vector b
         '''
         global_size = x_gpu.shape
         local_size = None
