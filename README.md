@@ -1,4 +1,5 @@
 # PyNetwork
+This repository is based on https://github.com/infamoussoap/PyNetwork.
 Lightweight implementation for deep learning using Numpy. 
 
 It implements four standard layers: (1) BatchNorm, (2) Dense, (3) Convolutional, and (4) Flatten layers. It also comes with three optimizers: (1) SGD (with and without Nesterov Acceleration), (2) RMSProp, and (4) Adam. 
