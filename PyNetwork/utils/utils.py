@@ -52,6 +52,72 @@ class NaiveMatMul:
             NaiveMatMul.program.naive_matmul_Fortran(*inputs).wait()
 
         return matrix_out 
+    
+
+class FastMatMul:
+    def __init__(self, context, queue):
+        FastMatMul.context = context
+        FastMatMul.queue = queue
+        FastMatMul.program = cl.Program(context, utils.fast_matmul_program).build()     
+
+    @staticmethod
+    def fastMatmul(x_gpu, y_gpu):
+        '''
+        "Tiled" Matrix Multiplication
+        Parameters
+        ----------
+        x_gpu: (N, d) pyopencl.array
+        y_gpu: (d, k) pyopencl.array
+        Returns
+        ----------
+        (N, k) C-contiguous pyopencl.array
+        '''
+        # define block size on work group size
+        block_size = 16
+
+        # store original dimensions of matrices
+        m, _ = x_gpu.shape
+        n = y_gpu.shape[1]
+
+        # Pad the matrices to be of dimension a multiple of block size
+        pad_rows_x = block_size - x_gpu.shape[0] % block_size
+        pad_cols_x = block_size - x_gpu.shape[1] % block_size
+        pad_rows_y = block_size - y_gpu.shape[0] % block_size
+        pad_cols_y = block_size - y_gpu.shape[1] % block_size
+        x_gpu = np.pad(x_gpu, ((0, pad_rows_x), (0, pad_cols_x)), 'constant')
+        y_gpu = np.pad(y_gpu, ((0, pad_rows_y), (0, pad_cols_y)), 'constant')
+
+        # create empty output matrix 
+        matrix_out = np.empty((x_gpu.shape[0], y_gpu.shape[1])).astype(np.float32)
+
+        # define parameters to input into kernel 
+        kernel_params = {'block_size': block_size, 'w_a': x_gpu.shape[1], 'h_a': x_gpu.shape[0], 'w_b': y_gpu.shape[1]}
+
+        # create program based on the fast_matmul_program openCl script, with the input parameters
+        FastMatMul.prg = cl.Program(FastMatMul.context, utils.fast_matmul_program % kernel_params).build(options='-cl-mad-enable -cl-fast-relaxed-math')
+
+        kernel = FastMatMul.prg.tiled_matmul
+
+        # Create matrix buffers
+        mf = cl.mem_flags
+        x_buf = cl.Buffer(FastMatMul.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=x_gpu)
+        y_buf = cl.Buffer(FastMatMul.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=y_gpu)
+        out_buf = cl.Buffer(FastMatMul.context, mf.WRITE_ONLY, matrix_out.nbytes)
+
+        # define global and local memory size
+        global_size = matrix_out.shape
+        local_size = (block_size, block_size)
+        
+        # run the program
+        event = FastMatMul.prg.tiled_matmul(FastMatMul.queue, global_size, local_size, out_buf, x_buf, y_buf).wait()
+
+        # copy result back to host memory
+        cl.enqueue_copy(FastMatMul.queue, matrix_out, out_buf)
+
+        matrix_out = matrix_out[:m, :n]
+
+        return matrix_out 
+    
 
 class ArrayFunctions:
     def __init__(self, context, queue):
