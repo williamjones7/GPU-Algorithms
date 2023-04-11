@@ -168,7 +168,7 @@ class Sequential:
             metric_val = self.metric(prediction, y_test)
             eval_str += f' - {self.metric_function}: {format(metric_val, ".4f")}'
 
-        return eval_str
+        return metric_val, eval_str
 
     def train(self, x_train, y_train, epochs=100, batch_size=None, verbose=True):
         """ Train the neural network by means of back propagation
