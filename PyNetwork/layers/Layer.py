@@ -13,7 +13,7 @@ class Layer(abc.ABC):
     """
 
     @abc.abstractmethod
-    def build(self, previous_output_shape):
+    def build(self, context, queue, previous_output_shape):
         """ When the build method is called in the `sequential` class it invokes this
             method. This allows the for the given layer to initialise the required variables.
         """

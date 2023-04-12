@@ -3,7 +3,7 @@ import numpy as np
 from PyNetwork import ActivationFunctions
 from PyNetwork.layers import Layer
 from PyNetwork.validation import check_layer
-from PyNetwork.utils import utils
+from PyNetwork.utils import NaiveMatMul, ArrayFunctions, GPUTranspose
 
 import pyopencl as cl
 import pyopencl.array as cl_array
@@ -33,7 +33,8 @@ class Dense(Layer):
         It is assumed that the input to this layer is a flattened vector. As such, when passing
         a multidimensional input, use a `flatten` layer first
     """
-    def __init__(self, hidden_nodes, activation_function, l1=0.0, l2=0.0, trainable_mask_gpu=None, activation_kwargs=None, **kwargs):
+    def __init__(self, hidden_nodes, activation_function, l1=0.0, l2=0.0, trainable_mask_gpu=None, 
+                 activation_kwargs=None, matmul_method=NaiveMatMul, **kwargs):
         """ A fully connected layer
 
             Parameters
@@ -44,11 +45,15 @@ class Dense(Layer):
                 The name of the activation function of this layer
             activation_kwargs : dict of str - :obj:, optional
                 The keyword arguments for the activation function if it has hyper-parameters
+            matmul_method : dict of str - :obj:, optional
+                The keyword arguments for the type of matrix multiplication (naive or tiled)
         """
         self.hidden_nodes = hidden_nodes
 
         self.activation_function = activation_function
         self.activation_kwargs = {} if activation_kwargs is None else activation_kwargs
+
+        self.matmul_method = matmul_method
 
         self.output_shape = None
         self.input_shape = None
@@ -90,7 +95,7 @@ class Dense(Layer):
         limit = np.sqrt(6 / (np.prod(self.input_shape) + np.prod(self.output_shape)))
         W = np.random.uniform(low=-limit, high=limit, size=(*self.output_shape, *previous_output_shape))
 
-        self.W_gpu = cl_array.to_device(self.queue, W)
+        self.W_gpu = cl_array.to_device(self.queue, W.astype(np.float32))
         self.b_gpu = cl_array.zeros(self.queue, self.output_shape, dtype=np.float32)
         
         if self.trainable_mask_gpu is not None:
@@ -99,8 +104,9 @@ class Dense(Layer):
 
         self.built = True
 
-        self.gpu_maths = utils.ArrayFunctions(self.context, self.queue)
-        self.gpu_matmul = utils.NaiveMatMul(self.context, self.queue)
+        self.gpu_maths = ArrayFunctions(self.context, self.queue)
+        self.gpu_matmul = self.matmul_method(self.context, self.queue)
+        self.gpu_transpose = GPUTranspose(context, queue)
         self.activation = ActivationFunctions(self.context, self.queue)
 
     def predict(self, z_gpu, output_only=True, **kwargs):
@@ -131,9 +137,9 @@ class Dense(Layer):
         """
         check_layer(self)
 
-        W_gpu_T = cl_array.transpose(self.W_gpu)
+        W_gpu_T = self.gpu_transpose.transpose(self.W_gpu)
 
-        prod = self.gpu_matmul.naiveMatmul(z_gpu, W_gpu_T)
+        prod = self.gpu_matmul.Matmul(z_gpu, W_gpu_T)
         out_a = self.gpu_maths.addVector(prod, self.b_gpu)
 
         if output_only:
@@ -163,7 +169,9 @@ class Dense(Layer):
         """
         check_layer(self)
 
-        delta_result = g_prime_gpu * self.gpu_matmul.naiveMatmul(new_delta_gpu, self.W_gpu)
+        g_prime_gpu = g_prime_gpu.reshape(len(g_prime_gpu), -1)
+        
+        delta_result = g_prime_gpu * self.gpu_matmul.Matmul(new_delta_gpu, self.W_gpu)
         return delta_result
 
     def get_weight_grad_(self, delta_gpu, prev_z_gpu):
@@ -185,9 +193,9 @@ class Dense(Layer):
                 The second array is the gradient for the weight matrix
         """
         check_layer(self)
-        delta_gpu_T = cl_array.transpose(delta_gpu)
+        delta_gpu_T = self.gpu_transpose.transpose(delta_gpu)
 
-        weight_grad = self.gpu_matmul.naiveMatmul(delta_gpu_T, prev_z_gpu)
+        weight_grad = self.gpu_matmul.Matmul(delta_gpu_T, prev_z_gpu)
         bias_grad = self.gpu_maths.rowSumUp(delta_gpu)
 
         return bias_grad, weight_grad
@@ -206,7 +214,7 @@ class Dense(Layer):
  
         regularization_grad = cl_array.zeros(self.queue, self.W_gpu.shape, dtype=np.float32)
         if self.l1 > 0:
-            regularization_grad += self.l1 * utils.gpu_maths.clarray_sign(self.W_gpu)
+            regularization_grad += self.l1 * self.gpu_maths.clarray_sign(self.W_gpu)
         if self.l2 > 0:
             regularization_grad += self.l2 * self.W_gpu
 
