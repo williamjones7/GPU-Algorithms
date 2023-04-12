@@ -26,7 +26,7 @@ class Adam(Optimizer):
             Stores the previous value of the second raw momentum
     """
 
-    def __init__(self, queue, learning_rate=0.001, b1=0.9, b2=0.999, e=1e-8):
+    def __init__(self, learning_rate=0.001, b1=0.9, b2=0.999, e=1e-8):
         """ Initialise attributes of Adam Optimiser
 
             Parameters
@@ -45,8 +45,6 @@ class Adam(Optimizer):
         self.m = None
         self.v = None
         self.t = 0
-
-        self.queue = queue
 
     def step(self, grad_dict):
         """ Returns the gradients as scheduled by Adam
@@ -84,7 +82,7 @@ class Adam(Optimizer):
         self.v = {key: self.b2 * v + (1 - self.b2) * (g**2) if g is not None else None
                   for (key, v, g) in zip(grad_dict.keys(), self.v.values(), grad_dict.values())}
 
-        a = self.learning_rate * clmath.sqrt(1 - self.b2 ** self.t) / (1 - self.b1 ** self.t)
+        a = self.learning_rate * np.sqrt(1 - self.b2 ** self.t) / (1 - self.b1 ** self.t)
 
         return {key: a * m / (clmath.sqrt(v) + self.e) if v is not None else None
                 for (key, m, v) in zip(self.m.keys(), self.m.values(), self.v.values())}

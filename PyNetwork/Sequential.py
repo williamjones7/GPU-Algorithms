@@ -170,8 +170,9 @@ class Sequential:
         if self.metric_function is not None:
             metric_val = self.metric(prediction, y_test_gpu)
             eval_str += f' - {self.metric_function}: {format(metric_val.get(), ".4f")}'
+            return metric_val.get(), eval_str
 
-        return metric_val, eval_str
+        return loss_val.get(), eval_str
 
     def train(self, x_train_gpu, y_train_gpu, epochs=100, batch_size=None, verbose=True):
         """ Train the neural network by means of back propagation
@@ -225,7 +226,7 @@ class Sequential:
                 
                 evaluation = self.evaluate(batch_x, batch_y)
                 print(f'Epoch {_ + 1}/{epochs}')
-                print(evaluation)
+                print(evaluation[1])
 
     def summary(self):
         """ Prints a summary of the layers in the `sequential` class
