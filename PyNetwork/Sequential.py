@@ -1,12 +1,12 @@
 import numpy as np
 import random
 
-from PyNetwork.layers import Layer
-from PyNetwork import ErrorFunctions, get_metric_function
+from PyNetwork.layers import Layer, Flatten, Input, BatchNorm
+from PyNetwork import ErrorFunctions, MetricFunctions
 from PyNetwork.optimizers import Optimizer, get_optimizer
-from PyNetwork.layers import Flatten, Input, BatchNorm
 from .utils.utils import buffer_str
 
+import pyopencl.array as cl_array
 
 class Sequential:
     """ Build a neural network sequentially by using the .add function
@@ -15,7 +15,6 @@ class Sequential:
         ----------
         layers : dict of int - class
             Store the individual layers as a form of classes
-
     """
 
     def __init__(self):
@@ -33,7 +32,7 @@ class Sequential:
 
             Notes
             -----
-            The layers are stacked in the order that they are added in, hence the name sequential.
+            The layers are stacked in the order that they are added in, hence the name sequential
 
             Also, sequential models must always start with the `Input` class
 
@@ -48,7 +47,7 @@ class Sequential:
 
         self.layers[self.n + 1] = layer
         
-    def build(self, loss_function, optimizer, metrics=None):
+    def build(self, context, queue, loss_function, optimizer, metrics=None):
         """ Once the model layers have been added this method must be called to initialise
             all the `sequential_layer` classes
 
@@ -57,6 +56,8 @@ class Sequential:
             metrics : str, optional
                 The name of the function to judge performance of the model
         """
+        self.context = context
+        self.queue = queue
 
         if isinstance(optimizer, Optimizer):
             self.optimizer_bias = optimizer
@@ -74,8 +75,10 @@ class Sequential:
         for i in range(1, self.n + 1):
             layer = self.layers[i]
 
-            layer.build(previous_output_shape)
+            layer.build(self.context, self.queue, previous_output_shape)
             previous_output_shape = layer.output_shape
+
+        self.gpu_metric = MetricFunctions(self.context, self.queue)
         
     def _validate_x_shape(self, x_shape, name):
         input_shape = self.layers[1].input_shape
@@ -93,14 +96,14 @@ class Sequential:
         else:
             assert output_shape == y_shape[1:], f"{name} has shape {y_shape} but {target_shape} was expected. Try {name}.reshape({target_shape})."
 
-    def predict(self, x_train, output_only=True):
+    def predict(self, x_train_gpu, output_only=True):
         """ Forward propagate the input through the layers
 
             Parameters
             ----------
-            x_train : np.array
-                x_train is assumed to be a list of all the inputs to be forward propagated. In particular
-                it is assumed that the 0th index of x_train is the index that inputs is accessed by
+            x_train_gpu : pyopencl.array
+                x_train_gpu is assumed to be a list of all the inputs to be forward propagated. In particular
+                it is assumed that the 0th index of x_train_gpu is the index that inputs is accessed by
 
             output_only : :obj:`bool`, optional
                 If set to true, then this function will return only the prediction of the neural
@@ -109,27 +112,27 @@ class Sequential:
 
             Returns
             -------
-            np.array
+            pyopencl.array
                 The final layer output of the neural netowork
 
             OR (if `output_only = False`)
 
-            dict of int - np.array, dict of int - np.array
+            dict of int - pyopencl.array, dict of int - pyopencl.array
                 The first dictionary will store outputs of all layers before it is passed through the activation
                 function.
                 The second dictionary will store the outputs of all layers after it has passed through the
                 activation function.
         """
-        self._validate_x_shape(x_train.shape, "x_train")
+        self._validate_x_shape(x_train_gpu.shape, "x_train_gpu")
 
         if output_only:
-            working_z = x_train
+            working_z = x_train_gpu
             for i in range(1, self.n + 1):  # Propagate working_Z throughout the layers
                 working_z = self.layers[i].predict(working_z, output_only=True)
             return working_z
         else:
             a_dict = {0: None}
-            z_dict = {0: x_train}
+            z_dict = {0: x_train_gpu}
 
             for i in range(1, self.n + 1):
                 current_layer = self.layers[i]
@@ -139,48 +142,48 @@ class Sequential:
                 i += 1
             return a_dict, z_dict
 
-    def evaluate(self, x_test, y_test):
+    def evaluate(self, x_test_gpu, y_test_gpu):
         """ Return the MSE of the model prediction
 
             Parameters
             ----------
-            x_test : np.array
-                X_test is assumed to be a list of all the inputs to be forward propagated. In particular
-                it is assumed that the first index of X_test is the index that inputs is accessed by
-            y_test : np.array
-                y_test is the associated list of outputs to the list of inputs X_test.
+            x_test_gpu : pyopencl.array
+                x_test_gpu is assumed to be a list of all the inputs to be forward propagated. In particular
+                it is assumed that the first index of x_test_gpu is the index that inputs is accessed by
+            y_test_gpu : pyopencl.array
+                y_test_gpu is the associated list of outputs to the list of inputs x_test_gpu.
 
             Returns
             -------
             str
                 The error
         """
-        self._validate_x_shape(x_test.shape, "x_test")
-        self._validate_y_shape(y_test.shape, "y_test")
+        self._validate_x_shape(x_test_gpu.shape, "x_test_gpu")
+        self._validate_y_shape(y_test_gpu.shape, "y_test_gpu")
         
-        prediction = self.predict(x_test)
+        prediction = self.predict(x_test_gpu)
 
-        loss_val = self.loss(prediction, y_test)
+        loss_val = self.loss(prediction, y_test_gpu)
 
-        eval_str = f'{self.loss_function}: {format(loss_val, ".4f")}'
+        eval_str = f'{self.loss_function}: {format(loss_val.get(), ".4f")}'
 
         if self.metric_function is not None:
-            metric_val = self.metric(prediction, y_test)
-            eval_str += f' - {self.metric_function}: {format(metric_val, ".4f")}'
+            metric_val = self.metric(prediction, y_test_gpu)
+            eval_str += f' - {self.metric_function}: {format(metric_val.get(), ".4f")}'
 
         return eval_str
 
-    def train(self, x_train, y_train, epochs=100, batch_size=None, verbose=True):
+    def train(self, x_train_gpu, y_train_gpu, epochs=100, batch_size=None, verbose=True):
         """ Train the neural network by means of back propagation
 
             Parameters
             ----------
-            x_train : np.array
-                x_train is assumed to be a list of all the inputs to be forward propagated. In particular
-                it is assumed that the first index of x_train is the index that inputs is accessed by
-            y_train : np.array
-                y_train is the associated list of outputs to the list of inputs x_train. More specifically,
-                the neural network will be trained to find the map x_train -> y_train
+            x_train_gpu : pyopencl.array
+                x_train_gpu is assumed to be a list of all the inputs to be forward propagated. In particular
+                it is assumed that the first index of x_train_gpu is the index that inputs is accessed by
+            y_train_gpu : pyopencl.array
+                y_train_gpu is the associated list of outputs to the list of inputs x_train_gpu. More specifically,
+                the neural network will be trained to find the map x_train_gpu -> y_train_gpu
 
             epochs : :obj:`int`, optional
                 Number of times the neural network will see the entire dataset
@@ -191,28 +194,35 @@ class Sequential:
                 If set to `True` then the model performance will be printed after each epoch
 
         """
-        self._validate_x_shape(x_train.shape, "x_train")
-        self._validate_y_shape(y_train.shape, "y_train")
+        self._validate_x_shape(x_train_gpu.shape, "x_train_gpu")
+        self._validate_y_shape(y_train_gpu.shape, "y_train_gpu")
 
-        training_length = len(x_train)
+        training_length = len(x_train_gpu)
         if batch_size is None:
             batch_size = training_length
         index = np.arange(training_length)
 
         for _ in range(epochs):
             if verbose:
-                print(f'Training on {len(x_train)} samples')
+                print(f'Training on {len(x_train_gpu)} samples')
 
             random.shuffle(index)
             for i in range(np.ceil(training_length / batch_size).astype(int)):
                 start, end = i * batch_size, (i + 1) * batch_size
-                batch_x, batch_y = x_train[index[start:end]], y_train[index[start:end]]
+                batch_index = index[start:end]
+
+                batch_x = cl_array.stack([x_train_gpu[j] for j in batch_index], axis=0)
+                batch_y = cl_array.stack([y_train_gpu[j] for j in batch_index], axis=0)
 
                 self._back_prop(batch_x, batch_y)
 
             if verbose:
                 start, end = 0, batch_size
-                batch_x, batch_y = x_train[index[start:end]], y_train[index[start:end]]
+                batch_index = index[start:end]
+
+                batch_x = cl_array.stack([x_train_gpu[j] for j in batch_index], axis=0)
+                batch_y = cl_array.stack([y_train_gpu[j] for j in batch_index], axis=0)
+                
                 evaluation = self.evaluate(batch_x, batch_y)
                 print(f'Epoch {_ + 1}/{epochs}')
                 print(evaluation)
@@ -234,7 +244,7 @@ class Sequential:
     @property
     def metric(self):
         if self.metric_function is not None:
-            return get_metric_function(self.metric_function)
+            return self.gpu_metric.get_metric_function(self.metric_function)
         return None
 
     @property
@@ -244,27 +254,27 @@ class Sequential:
     def __len__(self):
         return self.n
 
-    def _back_prop(self, x_train, y_train):
-        """ Perform a single back propagation of the batch `x_train`, `y_train`.
+    def _back_prop(self, x_train_gpu, y_train_gpu):
+        """ Perform a single back propagation of the batch `x_train_gpu`, `y_train_gpu`.
 
             Parameters
             ----------
-            x_train : np.array
-                x_train is assumed to be a list of all the inputs to be forward propagated. In particular
-                it is assumed that the first index of x_train is the index that inputs is accessed by
-            y_train : np.array
-                y_train is the associated list of outputs to the list of inputs x_train. More specifically,
-                the neural network will be trained to find the map x_train -> y_train
+            x_train_gpu : pyopencl.array
+                x_train_gpu is assumed to be a list of all the inputs to be forward propagated. In particular
+                it is assumed that the first index of x_train_gpu is the index that inputs is accessed by
+            y_train_gpu : pyopencl.array
+                y_train_gpu is the associated list of outputs to the list of inputs x_train_gpu. More specifically,
+                the neural network will be trained to find the map x_train_gpu -> y_train_gpu
         """
 
         # Forward propagate
-        a_dict, z_dict = self.predict(x_train, output_only=False)
+        a_dict, z_dict = self.predict(x_train_gpu, output_only=False)
         delta_dict, grad_dict = {}, {}
 
         # Compute delta for the last layer
-        delta_dict[self.n] = self.loss(z_dict[self.n], y_train, grad=True)  # Gradient of output
+        delta_dict[self.n] = self.loss(z_dict[self.n], y_train_gpu, grad=True)  # Gradient of output
         if self.loss_function == 'cross_entropy':
-            delta_dict[self.n] = z_dict[self.n] - y_train
+            delta_dict[self.n] = z_dict[self.n] - y_train_gpu
 
         # Compute the weight gradients for the i-th layer and then compute delta_{i-1} for the
         # next layer in the network
