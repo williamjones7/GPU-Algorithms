@@ -171,7 +171,7 @@ class Sequential:
             metric_val = self.metric(prediction, y_test_gpu)
             eval_str += f' - {self.metric_function}: {format(metric_val.get(), ".4f")}'
 
-        return eval_str
+        return metric_val, eval_str
 
     def train(self, x_train_gpu, y_train_gpu, epochs=100, batch_size=None, verbose=True):
         """ Train the neural network by means of back propagation
