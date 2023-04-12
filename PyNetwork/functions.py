@@ -26,36 +26,39 @@ def GPU_sum(queue, x):
 
 class ActivationFunctions:
     def __init__(self, context, queue):
-        
         ActivationFunctions.context = context
         ActivationFunctions.queue = queue
+
         ActivationFunctions.relu_program = ElementwiseKernel(ActivationFunctions.context,
-                                                                  "double *x, double *out",
-                                                                  "out[i] = x[i] > 0 ? x[i] : 0.0",
-                                                                  "relu")
+                                                             "double *x, double *out",
+                                                             "out[i] = x[i] > 0.0 ? x[i] : 0.0",
+                                                             "relu")
+        
         ActivationFunctions.relu_grad_program = ElementwiseKernel(ActivationFunctions.context,
-                            "double *x, double *out",
-                            "out[i] = x[i] > 0 ? 1.0 : 0.0",
-                            "relu_grad")
+                                                                  "double *x, double *out",
+                                                                  "out[i] = x[i] > 0.0 ? 1.0 : 0.0",
+                                                                  "relu_grad")
         
 
     @staticmethod
     def relu(x_gpu, grad=False):
-        print(ActivationFunctions.context)
         x_gpu_precise = x_gpu.astype(np.float64)
         out_gpu = cl_array.zeros_like(x_gpu_precise)
 
         if grad:
             ActivationFunctions.relu_grad_program(x_gpu_precise, out_gpu).wait()
+            return out_gpu.astype(np.float32)
 
         ActivationFunctions.relu_program(x_gpu_precise, out_gpu).wait()
         return out_gpu.astype(np.float32)
+
 
     @staticmethod
     def linear(x_gpu, grad=False):
         if grad:
             return 1 + cl_array.zeros_like(x_gpu)
         return x_gpu
+
 
     @staticmethod
     def get_activation_function(name, **kwargs):
@@ -94,22 +97,21 @@ class ActivationFunctions:
 
 
 class ErrorFunctions:
-
     @staticmethod
-    def mse(predictions, targets, grad = False):
+    def mse(predictions_gpu, targets_gpu, grad = False):
         if grad:
-            return (predictions - targets) * 2
-        N, _ = predictions.shape
-        RS = ((predictions - targets) * (predictions - targets)) / 2
+            return (predictions_gpu - targets_gpu) * 2
+        N, _ = predictions_gpu.shape
+        RS = ((predictions_gpu - targets_gpu) * (predictions_gpu - targets_gpu)) / 2
         return cl_array.sum(RS) / N
     
     @staticmethod
-    def cross_entropy(predictions, targets, epsilon=1e-12, grad=False):
+    def cross_entropy(predictions_gpu, targets_gpu, epsilon=1e-12, grad=False):
         """ Computes cross entropy between targets (encoded as one-hot vectors) and predictions.
             Parameters
             ----------
-                predictions : (N, k) pyopencl.array
-                targets     : (N, k) pyopencl.array
+                predictions_gpu : (N, k) pyopencl.array
+                targets_gpu     : (N, k) pyopencl.array
             Returns
             -------
                 float
@@ -118,17 +120,17 @@ class ErrorFunctions:
                 (N, k) pyopencl.array
                     If grad = True then the gradient of the output is returned
         """
-        ArrayFunctions.clarray_clip(predictions, epsilon, 1.0 - epsilon)
+        ArrayFunctions.clarray_clip(predictions_gpu, epsilon, 1.0 - epsilon)
 
         if grad:
-            return (-targets / predictions + (1.0 - targets) / (1.0 - predictions))
+            return (-targets_gpu / predictions_gpu + (1.0 - targets_gpu) / (1.0 - predictions_gpu))
 
-        N, _ = predictions.shape
-        MP = targets * clmath.log(predictions + 1e-9)
+        N, _ = predictions_gpu.shape
+        MP = targets_gpu * clmath.log(predictions_gpu + 1e-9)
         ce = -cl_array.sum(MP) / N
         return ce
     
-
+    @staticmethod
     def get_error_function(name):
         """ Returns the function of the given name
             Parameters
@@ -147,25 +149,32 @@ class ErrorFunctions:
         else:
             raise Exception(f'{name} is not a defined function.')
 
+class MetricFunctions:
+    def __init__(self, context, queue):
+        MetricFunctions.gpu_maths = utils.ArrayFunctions(context, queue)
+    
+    @staticmethod
+    def accuracy(predictions_gpu, target_gpu):
+        N = predictions_gpu.shape[0]
+        return cl_array.sum(MetricFunctions.gpu_maths.rowArgmax(predictions_gpu)
+                            == MetricFunctions.gpu_maths.rowArgmax(target_gpu)) / N
+    
+    @staticmethod
+    def get_metric_function(name):
+        """ Returns the metric fucntion of a given name
+            Parameters
+            ----------
+            name : str
+                The name of the desired function
 
-def get_metric_function(name):
-    """ Returns the metric fucntion of a given name
-
-        Parameters
-        ----------
-        name : str
-            The name of the desired function
-
-        Raises
-        ------
-        Exception
-            If `name` has not been implemented
-    """
-    if name == 'accuracy':
-        def accuracy(predictions, target):
-            return np.mean(np.argmax(predictions, axis=-1) == np.argmax(target, axis=-1))
-        return accuracy
-    else:
-        raise Exception(f'{name} is not a defined metric.')
+            Raises
+            ------
+            Exception
+                If `name` has not been implemented
+        """
+        if name == 'accuracy':
+            return MetricFunctions.accuracy
+        else:
+            raise Exception(f'{name} is not a defined metric.')
 
     
