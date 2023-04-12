@@ -55,6 +55,40 @@ __kernel void naive_matmul_Fortran(__global float *X, __global float *Y, int inp
 }
 """
 
+# C kernel for transpose
+transpose_program = """
+// Return the transpose of a square matrix with dimension divisible by 16
+// Taken from 
+// https://colab.research.google.com/drive/15yk8JbY-GadZhyUDyb1MLAokatYhJ0PQ?usp=sharing
+
+#define BLOCK_SIZE 16
+#define A_BLOCK_STRIDE (BLOCK_SIZE * width)
+#define A_T_BLOCK_STRIDE (BLOCK_SIZE * height)
+
+__kernel void transpose(__global float *a_t, __global float *a, int width, int height, __local float *a_local){
+    int global_col = get_global_id(0);
+    int global_row = get_global_id(1);
+
+    int local_col = get_local_id(0);
+    int local_row = get_local_id(1);
+
+    int local_index = local_row * BLOCK_SIZE + local_col;
+
+    a_local[local_index] = a[global_row * width + global_col];
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    int group_col = get_group_id(0);
+    int group_row = get_group_id(1);
+
+    /* Transpose the blocks */
+    global_row = group_col * BLOCK_SIZE + local_row;
+    global_col = group_row * BLOCK_SIZE + local_col;
+
+    a_t[global_row * height + global_col] = a_local[local_col * BLOCK_SIZE + local_row];
+}
+"""
+
 # C kernel for calculations between a matrix and a vector
 array_functions_program = """
 //add a vector b to a matrix X
@@ -91,29 +125,29 @@ __kernel void div_vector(__global float *X, __global float *b, __global float *o
 }
 
 //returns the sum of each row
-__kernel void row_sums(__global float *delta, int num_rows, __global float *sums_out){
+__kernel void row_sums(__global float *x, int num_rows, __global float *sums_out){
     int i = get_global_id(0);
     int num_cols = get_global_size(0);
     double sum = 0.0;
     for (int k = 0; k < num_rows; k++){
-        sum += delta[k * num_cols + i];
+        sum += x[k * num_cols + i];
     }
     sums_out[i] = sum;
 }
 
 //returns the mean of each row
-__kernel void row_means(__global float *delta, int num_rows, __global float *means_out){
+__kernel void row_means(__global float *x, int num_rows, __global float *means_out){
     int i = get_global_id(0);
     int num_cols = get_global_size(0);
     double row_mean = 0.0;
     for (int k = 0; k < num_rows; k++){
-        row_mean += delta[k * num_cols + i] / (double) num_rows;
+        row_mean += x[k * num_cols + i] / (double) num_rows;
     }
     means_out[i] = row_mean;
 }
 
 //returns the variance of each row
-__kernel void row_vars(__global float *delta, __global float *mean, int num_rows, __global float *vars_out){
+__kernel void row_vars(__global float *x, __global float *mean, int num_rows, __global float *vars_out){
     int i = get_global_id(0);
     int num_cols = get_global_size(0);
 
@@ -122,9 +156,27 @@ __kernel void row_vars(__global float *delta, __global float *mean, int num_rows
     double row_mean = mean[i];
 
     for (int k = 0; k < num_rows; k++){
-        row_derivation = delta[k * num_cols + i] - row_mean;
+        row_derivation = x[k * num_cols + i] - row_mean;
         row_var += row_derivation * row_derivation / (double) num_rows;
     }
     vars_out[i] = row_var;
+}
+
+//returns the argmax of each row
+__kernel void row_argmaxs(__global float *x, int num_cols, __global int *argmax_out){
+    int i = get_global_id(0);
+    int idx_max = 0;
+    double current = 0.0;
+    double max = x[i * num_cols];
+
+    for (int k = 1; k < num_cols; k++){
+        current = x[i * num_cols + k];
+
+        if (current > max) {
+            max = current;
+            idx_max = k;
+        }
+    }
+    argmax_out[i] = idx_max;
 }
 """
