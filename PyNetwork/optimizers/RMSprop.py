@@ -1,9 +1,6 @@
-import numpy as np
+from pyopencl import clmath
 
 from PyNetwork.optimizers import Optimizer
-
-from PyNetwork.functions import GPU_sqrt
-
 
 class RMSprop(Optimizer):
     """ Adam optimiser
@@ -67,7 +64,7 @@ class RMSprop(Optimizer):
         self.v = {key: self.rho * v + (1 - self.rho) * g**2 if g is not None else None
                   for (key, v, g) in zip(grad_dict.keys(), self.v.values(), grad_dict.values())}
 
-        return {key: self.learning_rate * g / GPU_sqrt(v + self.e) if g is not None else None
+        return {key: self.learning_rate * g / clmath.sqrt(v + self.e) if g is not None else None
                 for (key, v, g) in zip(grad_dict.keys(), self.v.values(), grad_dict.values())}
 
     def new_instance(self):

@@ -2,7 +2,7 @@ import numpy as np
 
 from PyNetwork.optimizers import Optimizer
 
-from PyNetwork.functions import GPU_sqrt
+from pyopencl import clmath
 
 class Adam(Optimizer):
     """ Adam optimiser
@@ -84,9 +84,9 @@ class Adam(Optimizer):
         self.v = {key: self.b2 * v + (1 - self.b2) * (g**2) if g is not None else None
                   for (key, v, g) in zip(grad_dict.keys(), self.v.values(), grad_dict.values())}
 
-        a = self.learning_rate * GPU_sqrt(self.queue, (1 - self.b2 ** self.t) / (1 - self.b1 ** self.t))
+        a = self.learning_rate * clmath.sqrt(1 - self.b2 ** self.t) / (1 - self.b1 ** self.t)
 
-        return {key: a * m / (GPU_sqrt(self.queue, v) + self.e) if v is not None else None
+        return {key: a * m / (clmath.sqrt(v) + self.e) if v is not None else None
                 for (key, m, v) in zip(self.m.keys(), self.m.values(), self.v.values())}
 
     def new_instance(self):
