@@ -156,8 +156,12 @@ class MetricFunctions:
     @staticmethod
     def accuracy(predictions_gpu, target_gpu):
         N = predictions_gpu.shape[0]
-        return cl_array.sum(MetricFunctions.gpu_maths.rowArgmax(predictions_gpu)
-                            == MetricFunctions.gpu_maths.rowArgmax(target_gpu)) / N
+        
+        predicted_labels = MetricFunctions.gpu_maths.rowArgmax(predictions_gpu)
+        target_labels = MetricFunctions.gpu_maths.rowArgmax(target_gpu)
+
+        correct_labels = predicted_labels == target_labels
+        return cl_array.sum(correct_labels.astype(np.int32)) / N
     
     @staticmethod
     def get_metric_function(name):

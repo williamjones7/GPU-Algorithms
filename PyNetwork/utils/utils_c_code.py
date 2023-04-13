@@ -61,33 +61,16 @@ transpose_program = """
 // Taken from 
 // https://colab.research.google.com/drive/15yk8JbY-GadZhyUDyb1MLAokatYhJ0PQ?usp=sharing
 
-#define BLOCK_SIZE 16
-#define A_BLOCK_STRIDE (BLOCK_SIZE * width)
-#define A_T_BLOCK_STRIDE (BLOCK_SIZE * height)
+__kernel void transpose(__global float *a_t, __global float *a, int width, int height){
+    int global_col = get_global_id(1);
+    int global_row = get_global_id(0);
 
-__kernel void transpose(__global float *a_t, __global float *a, int width, int height, __local float *a_local){
-    int global_col = get_global_id(0);
-    int global_row = get_global_id(1);
 
-    int local_col = get_local_id(0);
-    int local_row = get_local_id(1);
-
-    int local_index = local_row * BLOCK_SIZE + local_col;
-
-    a_local[local_index] = a[global_row * width + global_col];
-
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    int group_col = get_group_id(0);
-    int group_row = get_group_id(1);
-
-    /* Transpose the blocks */
-    global_row = group_col * BLOCK_SIZE + local_row;
-    global_col = group_row * BLOCK_SIZE + local_col;
-
-    a_t[global_row * height + global_col] = a_local[local_col * BLOCK_SIZE + local_row];
+    a_t[global_row + global_col * width] = a[global_row * height + global_col];
 }
 """
+
+
 
 # C kernel for calculations between a matrix and a vector
 array_functions_program = """
@@ -181,7 +164,74 @@ __kernel void row_argmaxs(__global float *x, int num_cols, __global int *argmax_
 }
 """
 
+
 fast_matmul_program = """
+// Thread block size
+#define BLOCK_SIZE %(block_size)d
+// Matrix dimensions
+// (chosen as multiples of the thread block size for simplicity)
+#define WA %(w_a)d // Matrix A width
+#define HA %(h_a)d // Matrix A height
+#define WB %(w_b)d // Matrix B width
+#define HB WA  // Matrix B height
+#define WC WB  // Matrix C width
+#define HC HA  // Matrix C height
+
+__kernel __attribute__((reqd_work_group_size(16,16,1))) 
+void
+tiled_matmul( __global float* C, __global float* A, __global float* B)
+{
+    __local float As[BLOCK_SIZE*BLOCK_SIZE];
+    __local float Bs[BLOCK_SIZE*BLOCK_SIZE];
+    // Block index
+    int bx = get_group_id(0);
+    int by = get_group_id(1);
+    // Thread index
+    int tx = get_local_id(0);
+    int ty = get_local_id(1);
+    // Index of the first sub-matrix of A processed by the block
+    int aBegin = WA * BLOCK_SIZE * by;
+    // Index of the last sub-matrix of A processed by the block
+    int aEnd   = aBegin + WA - 1;
+    // Step size used to iterate through the sub-matrices of A
+    int aStep  = BLOCK_SIZE;
+    // Index of the first sub-matrix of B processed by the block
+    int bBegin = BLOCK_SIZE * bx;
+    // Step size used to iterate through the sub-matrices of B
+    int bStep  = BLOCK_SIZE * WB;
+    // Csub is used to store the element of the block sub-matrix
+    // that is computed by the thread
+    float Csub = 0.0f;
+    // Loop over all the sub-matrices of A and B
+    // required to compute the block sub-matrix
+    for (int a = aBegin, b = bBegin;
+             a <= aEnd;
+             a += aStep, b += bStep) {
+        // Load the matrices from device memory
+        // to shared memory; each thread loads
+        // one element of each matrix
+        As[tx + ty * (BLOCK_SIZE)] = A[a + WA * ty + tx];
+        Bs[tx + ty * (BLOCK_SIZE)] = B[b + WB * ty + tx];
+        // Synchronize to make sure the matrices are loaded
+        barrier(CLK_LOCAL_MEM_FENCE);
+        // Multiply the two matrices together;
+        // each thread computes one element
+        // of the block sub-matrix
+        for (int k = 0; k < BLOCK_SIZE; ++k)
+            Csub += As[k + ty * (BLOCK_SIZE)] * Bs[tx + k * (BLOCK_SIZE)];
+        // Synchronize to make sure that the preceding
+        // computation is done before loading two new
+        // sub-matrices of A and B in the next iteration
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    // Write the block sub-matrix to device memory;
+    // each thread writes one element
+    C[get_global_id(1) * get_global_size(0) + get_global_id(0)] = Csub;
+}
+"""
+
+
+fast_matmul_program_original = """
 // Thread block size
 #define BLOCK_SIZE %(block_size)d
 // Matrix dimensions
@@ -248,3 +298,4 @@ tiled_matmul( __global float* C, __global float* A, __global float* B)
     C[get_global_id(1) * get_global_size(0) + get_global_id(0)] = Csub;
 }
 """
+

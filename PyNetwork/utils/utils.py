@@ -93,6 +93,8 @@ class FastMatMul:
         # define parameters to input into kernel 
         kernel_params = {'block_size': block_size, 'w_a': x_gpu.shape[1], 'h_a': x_gpu.shape[0], 'w_b': y_gpu.shape[1]}
 
+        print(utils.fast_matmul_program % kernel_params)
+
         # create program based on the fast_matmul_program openCl script, with the input parameters
         FastMatMul.prg = cl.Program(FastMatMul.context, utils.fast_matmul_program % kernel_params).build(options='-cl-mad-enable -cl-fast-relaxed-math')
 
@@ -142,30 +144,15 @@ class GPUTranspose:
         '''
         width, height = x_gpu.shape
 
-        # Make the new shape divisible by 16
-        x_new_shape = int(16 * np.ceil(max(height, width) / 16))
-
-        global_size = (x_new_shape, x_new_shape)
-        local_size = (16, 16)
+        global_size = x_gpu.shape
+        local_size = None
         
-        # Fit input values into the new array divisible by 16
-        x_new = np.zeros((x_new_shape, x_new_shape)).astype(np.float32)
-        x_new[:width, :height] = x_gpu.get()
-        x_new_gpu = cl_array.to_device(GPUTranspose.queue, x_new)
-
-        x_transpose_filled = cl_array.zeros_like(x_new_gpu)
-        a_local = cl.LocalMemory(4 * 16 * (16 + 1))
-        
-        GPUTranspose.program.transpose(GPUTranspose.queue, global_size, local_size, x_transpose_filled.data,
-                               x_new_gpu.data, np.int32(x_new_shape), np.int32(x_new_shape), a_local).wait()
-        
-        # Romove redundant entries in the transposed matrix
+        # Fit input values into the new array divisible by 160
         x_transpose = cl_array.zeros(GPUTranspose.queue, (height, width), dtype=np.float32)
-        indices = cl_array.arange(GPUTranspose.queue, width, dtype=np.int32)
         
-        for row in range(height):
-            cl_array.take(x_transpose_filled[row], indices, x_transpose[row])
-
+        GPUTranspose.program.transpose(GPUTranspose.queue, global_size, local_size, 
+                                       x_transpose.data, x_gpu.data, np.int32(width), np.int32(height)).wait()
+        
         return x_transpose
 
 class ArrayFunctions:
