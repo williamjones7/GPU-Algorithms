@@ -251,8 +251,7 @@ class BatchNorm(Layer):
         self.input_shape = previous_output_shape
         self.output_shape = previous_output_shape
 
-        gamma = np.ones(self.input_shape)
-        self.gamma_gpu = cl_array.to_device(self.queue, gamma)
+        self.gamma_gpu = 1 + cl_array.zeros(self.queue, self.input_shape, dtype=np.float32)
         self.beta_gpu = cl_array.zeros(self.queue, self.input_shape, dtype=np.float32)
 
         self.built = True
@@ -293,19 +292,19 @@ class BatchNorm(Layer):
         """
         check_layer(self)
 
-        mean = self.gpu_maths.rowMean(z_gpu)
+        mu_gpu = self.gpu_maths.rowMean(z_gpu)
         std = self.gpu_maths.rowStd(z_gpu)
 
         # Temporary variable equivalent to z_gpu - mu_gpu
-        deviation = self.gpu_maths.addVector(z_gpu, -mean)
+        deviation = self.gpu_maths.addVector(z_gpu, -mu_gpu)
 
-        # Temporary variable equivalent to (z - mean) / np.sqrt(std ** 2 + self.epsilon)
+        # Temporary variable equivalent to (z_gpu - mu_gpu) / np.sqrt(std ** 2 + self.epsilon)
         c_1 = self.gpu_maths.divVector(deviation, clmath.sqrt(std ** 2 + self.epsilon))
 
-        # Temporary variable equivalent to self.gamma * ((z - mean) / np.sqrt(std ** 2 + self.epsilon))
+        # Temporary variable equivalent to self.gamma * ((z_gpu - mu_gpu) / np.sqrt(std ** 2 + self.epsilon))
         c_2 = self.gpu_maths.mulVector(c_1, self.gamma_gpu)
 
-        # Equivalent to self.gamma * ((z - mean) / np.sqrt(std ** 2 + self.epsilon)) + self.beta
+        # Equivalent to self.gamma * ((z_gpu - mu_gpu) / np.sqrt(std ** 2 + self.epsilon)) + self.beta
         a = self.gpu_maths.addVector(c_2, self.beta_gpu)
 
         if output_only:
