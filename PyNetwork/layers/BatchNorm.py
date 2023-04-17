@@ -258,6 +258,7 @@ class BatchNorm(Layer):
 
         self.gpu_maths = utils.ArrayFunctions(self.context, self.queue)
         self.batch_norm_grads = BatchNormGrads(self.context, self.queue)
+        self.activation = ActivationFunctions(self.context, self.queue)
 
     def predict(self, z_gpu, output_only=True, **kwargs):
         """ Returns the output of this layer
