@@ -266,6 +266,24 @@ class ArrayFunctions:
         return clmath.sqrt(matrix_out) 
     
     @staticmethod
+    def rowMax(x_gpu):
+        '''
+        Returns the index of the maximum of each row.
+        Implementation of np.max(x, axis=-1) in OpenCL.
+        '''
+        output_height = np.prod(x_gpu.shape[:-1])
+        output_width = x_gpu.shape[-1]
+        
+        global_size = (output_height,)
+        local_size = None
+        
+        matrix_out = cl_array.zeros(ArrayFunctions.queue, x_gpu.shape[:-1], dtype=np.float64)
+
+        ArrayFunctions.program.row_maxs(ArrayFunctions.queue, global_size, local_size, 
+                               x_gpu.data, np.int32(output_width), matrix_out.data).wait()
+        return matrix_out
+
+    @staticmethod
     def rowArgmax(x_gpu):
         '''
         Returns the index of the maximum of each row.

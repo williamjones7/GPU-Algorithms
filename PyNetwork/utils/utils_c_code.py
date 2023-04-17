@@ -70,7 +70,22 @@ __kernel void transpose(__global float *a_t, __global float *a, int width, int h
 }
 """
 
+# softmax program
+softmax_program = '''
+__kernel void softmax(__global const double *x, __global const double *max, const int num_cols, __global double *out){
+    int i = get_global_id(0);
+    int j = get_global_id(1);
 
+    double idx_max = max[i];
+    double total = 0.0;
+
+    for (int k = 0; k < num_cols; k++){
+        total += exp((double) x[i*num_cols + k] - idx_max);
+    }
+
+    out[i*num_cols + j] = exp(x[i*num_cols + j] - idx_max) / total;
+}
+'''
 
 # C kernel for calculations between a matrix and a vector
 array_functions_program = """
@@ -143,6 +158,21 @@ __kernel void row_vars(__global float *x, __global float *mean, int num_rows, __
         row_var += row_derivation * row_derivation / (double) num_rows;
     }
     vars_out[i] = row_var;
+}
+
+//returns the max of each row
+__kernel void row_maxs(__global float *x, int num_cols, __global int *max_out){
+    int i = get_globl_id(0);
+    double max = x[i * num_cols];
+    double current = 0.0;
+
+    for (int k = 1; k < num_cols; k++){
+        current = x[i * num_cols + k];
+        if (current > max){
+            max=current;
+        }
+        max_out[i] = max;
+    }
 }
 
 //returns the argmax of each row

@@ -38,6 +38,8 @@ class ActivationFunctions:
                                                                   "double *x, double *out",
                                                                   "out[i] = x[i] > 0.0 ? 1.0 : 0.0",
                                                                   "relu_grad")
+
+        ActivationFunctions.softmax_program = cl.Program(context, utils.softmax_program).build()
         
 
     @staticmethod
@@ -51,7 +53,26 @@ class ActivationFunctions:
 
         ActivationFunctions.relu_program(x_gpu_precise, out_gpu).wait()
         return out_gpu.astype(np.float32)
+    
+    @staticmethod
+    def softmax(x_gpu, grad=False):
+        x_gpu_precise = x_gpu.astype(np.float64)
+        input_size = np.int32(x_gpu_precise.shape[-1])
+        max_gpu = ArrayFunctions.rowMax(x_gpu_precise)
+        
+        soft_value = cl_array.empty_like(x_gpu_precise)
 
+        global_col = x_gpu_precise.shape[-1]
+        global_row = x_gpu_precise.shape[:-1]
+        global_shape = (np.prod(global_row).astype(np.int32), global_col)
+
+        ActivationFunctions.softmax_program.softmax(ActivationFunctions.queue, global_shape, None,
+                                                    x_gpu_precise.data, max_gpu.data, input_size,
+                                                    soft_value.data).wait()
+        if grad:
+            grad_gpu = (1 - soft_value) * soft_value
+            return grad_gpu.astype(np.float32)
+        return soft_value.astype(np.float32)
 
     @staticmethod
     def linear(x_gpu, grad=False):
@@ -76,21 +97,11 @@ class ActivationFunctions:
         if name == 'relu':
             return ActivationFunctions.relu
 
+        elif name == 'softmax':
+            return ActivationFunctions.softmax
+
         elif name == 'linear':
             return ActivationFunctions.linear
-            
-    #    elif name == 'softmax':
-    #        def softmax(x, grad=False):
-    #            if grad:
-    #                softmax_val = softmax(x, grad=False)
-    #                return softmax_val*(1 - softmax_val)
-    #
-    #            z = x - np.max(x, axis=-1, keepdims=True)
-    #            numerator = np.exp(z)
-    #            denominator = np.sum(numerator, axis=-1, keepdims=True)
-    #            return numerator / denominator
-    #
-    #        return softmax
 
         else:
             raise Exception(f'{name} is not a defined function.')
