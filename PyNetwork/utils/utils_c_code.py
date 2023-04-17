@@ -162,7 +162,7 @@ __kernel void row_vars(__global float *x, __global float *mean, int num_rows, __
 
 //returns the max of each row
 __kernel void row_maxs(__global float *x, int num_cols, __global int *max_out){
-    int i = get_globl_id(0);
+    int i = get_global_id(0);
     double max = x[i * num_cols];
     double current = 0.0;
 
