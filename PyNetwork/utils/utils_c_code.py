@@ -161,18 +161,17 @@ __kernel void row_vars(__global float *x, __global float *mean, int num_rows, __
 }
 
 //returns the max of each row
-__kernel void row_maxs(__global float *x, int num_cols, __global int *max_out){
+__kernel void row_maxs(__global const double *x, const int num_cols, __global double *max_out){
     int i = get_global_id(0);
     double max = x[i * num_cols];
     double current = 0.0;
-
     for (int k = 1; k < num_cols; k++){
         current = x[i * num_cols + k];
         if (current > max){
             max=current;
         }
-        max_out[i] = max;
     }
+    max_out[i] = max;
 }
 
 //returns the argmax of each row
