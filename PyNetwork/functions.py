@@ -39,6 +39,7 @@ class ActivationFunctions:
                                                                   "out[i] = x[i] > 0.0 ? 1.0 : 0.0",
                                                                   "relu_grad")
 
+        ActivationFunctions.gpu_maths = ArrayFunctions(context, queue)
         ActivationFunctions.softmax_program = cl.Program(context, utils.softmax_program).build()
         
 
@@ -58,7 +59,7 @@ class ActivationFunctions:
     def softmax(x_gpu, grad=False):
         x_gpu_precise = x_gpu.astype(np.float64)
         input_size = np.int32(x_gpu_precise.shape[-1])
-        max_gpu = ArrayFunctions.rowMax(x_gpu_precise)
+        max_gpu = ActivationFunctions.gpu_maths.rowMax(x_gpu_precise)
         
         soft_value = cl_array.empty_like(x_gpu_precise)
 
