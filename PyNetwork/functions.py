@@ -108,8 +108,6 @@ class ActivationFunctions:
 
 
 class ErrorFunctions:
-    def __init__(self, context, queue):
-        ErrorFunctions.gpu_maths = utils.ArrayFunctions(context, queue)
     @staticmethod
     def mse(predictions_gpu, targets_gpu, grad = False):
         if grad:
@@ -133,7 +131,7 @@ class ErrorFunctions:
                 (N, k) pyopencl.array
                     If grad = True then the gradient of the output is returned
         """
-        ErrorFunctions.gpu_maths.clarray_clip(predictions_gpu, epsilon, 1.0 - epsilon)
+        ArrayFunctions.clarray_clip(predictions_gpu, epsilon, 1.0 - epsilon)
 
         if grad:
             return (-targets_gpu / predictions_gpu + (1.0 - targets_gpu) / (1.0 - predictions_gpu))
